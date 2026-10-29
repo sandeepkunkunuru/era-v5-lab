@@ -88,7 +88,7 @@ def validate_xid_scan(d):
             problems.append(f"xid.events[{i}].severity must be 'warn' or 'fail', got {sev!r}")
         elif code in FATAL_XIDS and sev != "fail":
             problems.append(f"fatal Xid {code} ({FATAL_XIDS[code]}) must have severity 'fail', got {sev!r}")
-    if isinstance(counts, dict) and tally and counts != tally:
+    if isinstance(counts, dict) and counts != tally:
         problems.append(f"xid.counts {counts} does not match event counts {tally}")
     return problems, events
 
@@ -171,7 +171,8 @@ def validate_check(c, idx, expected_gpus=0):
         problems.extend(validate_collective(metrics))
         if metrics.get("backend") != "nccl":
             problems.append(f"{tag} cannot pass with backend={metrics.get('backend')!r}; CPU gloo is not GPU NCCL proof")
-        if metrics.get("world_size", 0) < 2:
+        ws = metrics.get("world_size")
+        if isinstance(ws, int) and ws < 2:
             problems.append(f"{tag} requires world_size >= 2 for inter-GPU collective proof")
     return problems
 
@@ -221,6 +222,10 @@ def validate_report(d):
     for i, c in enumerate(checks):
         problems.extend(validate_check(c, i, expected_gpus))
 
+    inv_checks = [c for c in checks if isinstance(c, dict) and c.get("name") == "gpu_inventory"]
+    if expected_gpus > 0 and not inv_checks:
+        problems.append("checks must include 'gpu_inventory' when expected_gpus > 0")
+
     want_verdict = expected_verdict([c for c in checks if isinstance(c, dict)])
     if verdict in VERDICTS and verdict != want_verdict:
         problems.append(f"verdict is {verdict!r}, but checks require {want_verdict!r}")
@@ -228,8 +233,11 @@ def validate_report(d):
     if "admit_training" in d:
         if not isinstance(d["admit_training"], bool):
             problems.append("admit_training must be bool")
-        elif d["admit_training"] and want_verdict != "pass":
-            problems.append(f"admit_training cannot be True when verdict is {want_verdict!r}")
+        elif d["admit_training"]:
+            if want_verdict != "pass":
+                problems.append(f"admit_training cannot be True when verdict is {want_verdict!r}")
+            elif expected_gpus > 0 and (not inv_checks or inv_checks[0].get("status") != "pass"):
+                problems.append("admit_training cannot be True when expected_gpus > 0 unless 'gpu_inventory' passed")
 
     drain = d.get("drain_reason")
     if drain is not None and not isinstance(drain, str):
@@ -294,7 +302,7 @@ def example_report(kind="prolog"):
                 {"name": "ecc_uncorrectable", "status": "skipped", "required": False,
                  "reason": "GPU inventory unavailable", "metrics": {}},
             ],
-            "drain_reason": "xid: ",
+            "drain_reason": "xid: 79",
         }
     checks = [
         {"name": "gpu_inventory", "status": "pass", "required": True, "reason": "",
@@ -398,6 +406,27 @@ def selftest():
     ch_fail = to_clickhouse_row(r3)
     cases.append(("ClickHouse row mapping (1 row per JSONL line)",
                   ch_pass["gpus_seen"] == 8 and ch_pass["nccl_status"] == "pass" and ch_fail["xid_codes"] == [31, 79, 94]))
+
+    # 12. Non-int world_size in nccl_all_reduce reports a violation without raising TypeError.
+    r12 = example_report("full")
+    r12["checks"][-1]["metrics"]["world_size"] = "8"
+    r12_null = example_report("full")
+    r12_null["checks"][-1]["metrics"]["world_size"] = None
+    cases.append(("non-int world_size in nccl_all_reduce rejected cleanly",
+                  any("world_size" in p for p in validate_report(r12))
+                  and any("world_size" in p for p in validate_report(r12_null))))
+
+    # 13. Non-empty xid.counts with empty xid.events is rejected.
+    r13 = example_report("prolog")
+    r13["checks"][1]["metrics"] = {"counts": {"79": 1}, "events": []}
+    cases.append(("xid.counts without matching xid.events rejected",
+                  any("xid.counts" in p for p in validate_report(r13))))
+
+    # 14. Missing gpu_inventory check when expected_gpus > 0 is rejected.
+    r14 = example_report("prolog")
+    r14["checks"] = [c for c in r14["checks"] if c["name"] != "gpu_inventory"]
+    cases.append(("missing gpu_inventory with expected_gpus > 0 rejected",
+                  any("gpu_inventory" in p for p in validate_report(r14))))
 
     failed = [name for name, ok in cases if not ok]
     for name, ok in cases:

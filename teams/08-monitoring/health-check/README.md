@@ -102,4 +102,4 @@ Each validated `v5-health/1` line maps to one row for the `node_health` table so
 
 ## 6. Self-test results
 
-`python -I teams/08-monitoring/health-check/health_check.py --selftest`: 12/12 passed, including Team 7's `health_injected_xid.json` fixture, standalone `xid_scan.py` and `nccl_probe.py` outputs, missing-tool `skipped` handling, and ClickHouse row flattening.
+`python -I teams/08-monitoring/health-check/health_check.py --selftest`: 15/15 passed, including Team 7's `health_injected_xid.json` fixture, standalone `xid_scan.py` and `nccl_probe.py` outputs, missing-tool `skipped` handling, non-integer `world_size` handling, `xid.counts` vs `xid.events` consistency, required `gpu_inventory` when `expected_gpus > 0`, and ClickHouse row flattening.
