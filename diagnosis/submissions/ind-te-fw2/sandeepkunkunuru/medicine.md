@@ -1,9 +1,9 @@
 # Medicine sheet: ind-te-fw2 (sandeepkunkunuru)
 
-Pack: 500 Telugu documents from FineWeb-2 (`tel_Telu`). All 500 read in full. Verdicts: 166 clean, 233 fix, 101 drop.
+Pack: 500 Telugu documents from FineWeb-2 (`tel_Telu`). All 500 read in full. Verdicts: 176 clean, 221 fix, 103 drop.
 
 **Harm test set.** The Telugu gold set from Data A / Data B is not in the repository yet. Every harm test below runs on a
-**proxy gold set: the 166 documents of this pack that I labelled `clean`**. At 166 documents, 1% is 1.66, so a medicine
+**proxy gold set: the 176 documents of this pack that I labelled `clean`**. At 176 documents, 1% is 1.76, so a medicine
 fails when it touches 2 or more. The test script takes a gold Parquet file as an argument, and I will re-run it on the
 real gold set when it is published.
 
@@ -14,27 +14,27 @@ the pack without that label that the medicine changes or drops.
 
 | Code | Count | Action | Gold changed | Gold dropped | Gold % | Result | Recall | Fires on unlabelled |
 |---|---|---|---|---|---|---|---|---|
-| C1 | 257 | fix | 0 | 0 | 0.0 | pass | 122/257 | 1 |
+| C1 | 250 | fix | 0 | 0 | 0.0 | pass | 122/250 | 1 |
 | D4 | 87 | drop | 0 | 0 | 0.0 | pass | 83/87 | 18 (8 are D5) |
 | D3 | 83 | none | – | – | – | no medicine | – | – |
 | C2 | 41 | fix | 0 | 0 | 0.0 | pass | 17/41 | 13 |
-| C5 | 14 | drop | 0 | 0 | 0.0 | **rejected** (side effects) | 2/14 | 21 |
-| G1 | 9 | fix | 0 | 0 | 0.0 | pass | 4/9 | 0 |
+| C5 | 14 | drop | 0 | 1 | 0.6 | **rejected** (side effects) | 2/14 | 21 |
+| C3 | 9 | fix | 0 | 0 | 0.0 | pass | 1/9 | 1 |
 | B2 | 8 | fix | 0 | 0 | 0.0 | pass | 6/8 | 0 |
 | F3 | 8 | drop | 0 | 0 | 0.0 | pass | 7/8 | 0 |
 | C4 | 8 | drop | 0 | 0 | 0.0 | pass | 1/8 | 1 |
-| C3 | 8 | fix | 0 | 0 | 0.0 | pass | 1/8 | 1 |
 | D5 | 8 | drop (by the D4 rule) | 0 | 0 | 0.0 | pass | 8/8 | – |
+| A6 | 8 | fix | 0 | 0 | 0.0 | pass | 3/8 | 3 |
 | F1 | 6 | fix | 1 | 0 | 0.6 | pass | 6/6 | 7 |
-| A6 | 6 | fix | 0 | 0 | 0.0 | pass | 3/6 | 3 |
+| G1 | 4 | fix | 0 | 0 | 0.0 | pass | 4/4 | 0 |
 
-All medicines together, in the order F3, D4, C4, C1, C2, B2, G1, A6, C3, F1: they change or drop 1 of 166 proxy-gold
+All medicines together, in the order F3, D4, C4, C1, C2, B2, G1, A6, C3, F1: they change or drop 1 of 176 proxy-gold
 documents (0.6%, the F1 case below), so the set passes too. The drop rules remove 84 of the 87 D4 documents, all 8 D5
 documents and all 8 F3 documents.
 
 ## Medicine 1: C1 boilerplate
 
-1. **Disease:** C1, 257 documents. Examples: `8d59bc181e2d8446` menu line `- వార్తలు - సినిమా - స్పోర్ట్స్` at offset 0;
+1. **Disease:** C1, 250 documents. Examples: `8d59bc181e2d8446` menu line `- వార్తలు - సినిమా - స్పోర్ట్స్` at offset 0;
    `ab4df107c4d439c6` `- మరింత చదవండి: IO నుండి` at offset 869; `58a735e896dd47e5` tweet embed URL at offset 1710.
    The most common markers are "ఇది కూడా చదవండి"/"Also read", "తాజా వార్తలు (Latest News)", "Don't Miss!", "Just In",
    News18 bylines, "First Publish Date", the Eenadu footer "గమనిక: ఈనాడు.నెట్‌లో కనిపించే…", and `pic.twitter.com` lines.
@@ -58,7 +58,7 @@ documents and all 8 F3 documents.
    ```
 3. **Action:** fix (delete the line).
 4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
-5. **Side effects:** recall is 122/257. Boilerplate that is glued into a paragraph, or that uses a phrase per site
+5. **Side effects:** recall is 122/250. Boilerplate that is glued into a paragraph, or that uses a phrase per site
    (headline lists, breadcrumb runs), is missed. A real sentence that starts with "Tags" or "Subscribe" would be deleted.
    I saw none in the pack.
 
@@ -84,12 +84,12 @@ documents and all 8 F3 documents.
        return None if marks >= 3 and rate > 15 else t
    ```
    Measured rate per 1,000 words (p10 / p50 / p90): D4+D5 documents 18.1 / 38.5 / 59.5; clean documents 0.0 / 0.0 / 0.8.
-   40 of 95 D4+D5 documents have a `te.` host; 0 of 166 clean documents do.
+   40 of 95 D4+D5 documents have a `te.` host; 0 of 176 clean documents do.
 3. **Action:** drop.
 4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass. Without the "at least 3" guard, the rule dropped
    `d847afa42c9df584`, a clean 102-word rain bulletin: 2 మరియు gives a rate of 19.6. A short text's rate is noise.
    The guard costs no recall (83/87 both ways).
-5. **Side effects:** it also drops 18 documents not labelled D4, 16 of them labelled `fix`. 8 are labelled D5 (translated bank, insurance
+5. **Side effects:** it also drops 18 documents not labelled D4, 14 of them labelled `fix`. 8 are labelled D5 (translated bank, insurance
    and health pages; `narendramodi.in/te`). Native prose with many lists ("A మరియు B మరియు C") can pass 15. Very short
    documents have a noisy rate. A Telugu site that serves its own content on a `te.` host would be dropped.
 
@@ -126,18 +126,18 @@ documents and all 8 F3 documents.
 2. **Medicine tested:** after the C1 deletion, drop the document when at least 14 non-empty lines are short (under 60
    characters) and have no end punctuation, and they make up more than 50% of the lines.
 3. **Action:** drop.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%).
-5. **Side effects. Rejected:** it drops 17 documents that readers labelled `fix` (news pages with captions, sub-heads
-   and menus that C1 misses), and it catches only 2 of the 14 C5 documents. Line shape does not separate list pages from
+4. **Harm test:** proxy gold: 0 changed, 1 dropped (0.6%, `2acf40242963f9fd` film crew credits).
+5. **Side effects. Rejected:** it drops 16 documents that readers labelled `fix` (news pages with captions, sub-heads
+   and menus that C1 misses) plus 1 clean film-credits press release, and it catches only 2 of the 14 C5 documents. Line shape does not separate list pages from
    articles in this pack. The medicine is **not** in the pipeline. In the pipeline, D4 (10) and F3 (4) together drop
    11 of the 14 C5 documents, because SEO list pages here are almost always machine-translated or adult. A real C5 medicine needs a
    link and teaser signal from the HTML, which this text-only pack does not have.
 
 ## Medicine 5: G1 orphan vowel signs
 
-1. **Disease:** G1, 9 documents. Examples: `a472cbb07057854e` a virama after a space, `్జకాగా`, at offset 4003
+1. **Disease:** G1, 4 documents (plus 4 G2 documents with broken conjuncts). Examples: `a472cbb07057854e` a virama after a space, `్జకాగా`, at offset 4003
    (hex U+0020 U+0C4D U+0C1C); `b1fc122a01e457a3` `ిిచేదు` at offset 2047 (U+0020 U+0C3F U+0C3F);
-   `efbc8e17f4225bf3` the broken conjunct `నేనేనువ్ఞ్వ` at offset 390.
+   `19499950e087f669` `ంంంంచి` at offset 1704 (U+0020 U+0C02).
 2. **Medicine:** delete a run of dependent vowel signs, virama or anusvara that follows whitespace or a line start. A
    dependent sign must follow a consonant.
    ```python
@@ -147,8 +147,7 @@ documents and all 8 F3 documents.
    ```
 3. **Action:** fix.
 4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
-5. **Side effects:** recall 4/9. A space put *inside* a word before a consonant (`అం దిస్తారు`, `ఉద్య మం`) is the same
-   damage, but it is not detectable without a dictionary, so it stays. Deleting the orphan sign leaves the word
+5. **Side effects:** recall 4/4 on orphan matras/viramas. A space put *inside* a word before a consonant (`అం దిస్తారు`, `ఉద్య మం`) or a legacy-font conjunct substitution (`నేనేనువ్ఞ్వ`, G2) is not detectable by a whitespace-matra rule without a dictionary, so it stays. Deleting the orphan sign leaves the word
    misspelt. It does not restore the word. Re-attaching the sign to the previous consonant would be riskier.
 
 ## Medicine 6: B2 HTML tags
@@ -209,7 +208,7 @@ documents and all 8 F3 documents.
 
 ## Medicine 9: C3 truncated teaser
 
-1. **Disease:** C3, 8 documents. Examples: `8c5a7540bec0d441` `పాకిస్థాన్ క్రికెట్ […]` at offset 540;
+1. **Disease:** C3, 9 documents. Examples: `8c5a7540bec0d441` `పాకిస్థాన్ క్రికెట్ […]` at offset 540;
    `232615716ef393f4` `ఈ మద్య సం` stops mid-word at offset 875; `2311ca6e49dffc35` `వేసుక..` at offset 300.
 2. **Medicine:** when the last paragraph ends in `[…]` or `[...]`, delete that paragraph.
    ```python
@@ -223,8 +222,8 @@ documents and all 8 F3 documents.
 4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass. The first version also cut paragraphs that end in `..`
    or `…`. It changed 2 gold documents (1.2%) and **failed**: Telugu writers end sentences with `..` and `…` as a style
    (`తో పాటు..`, `కొట్లాడతాం…`).
-5. **Side effects:** recall 1/8. A cut in the middle of a word or sentence with no marker is not detectable by a rule.
-   The automatic scan flagged 115 documents for "no end punctuation", and reading confirmed 8.
+5. **Side effects:** recall 1/9. A cut in the middle of a word or sentence with no marker is not detectable by a rule.
+   The automatic scan flagged 115 documents for "no end punctuation", and reading confirmed 9.
 
 ## Medicine 10: F1 personal data
 
@@ -245,7 +244,7 @@ documents and all 8 F3 documents.
 
 ## Medicine 11: A6 look-alike anusvara
 
-1. **Disease:** A6, 6 documents. Examples: `d5308e76e13e8058` `వ్యక్తిత్వo` with Latin `o` (U+006F) for anusvara at
+1. **Disease:** A6, 8 documents. Examples: `d5308e76e13e8058` `వ్యక్తిత్వo` with Latin `o` (U+006F) for anusvara at
    offset 2910; `64e785802da2651a` `శoఖం` at offset 3160; `f7dafcbdfdb85610` `స౦గతి` with Telugu digit zero (U+0C66)
    at offset 70.
 2. **Medicine:** a Latin `o` or Telugu digit zero that follows a Telugu consonant or vowel sign, and is followed by a
@@ -257,8 +256,7 @@ documents and all 8 F3 documents.
    ```
 3. **Action:** fix.
 4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
-5. **Side effects:** recall 3/6. Other stray Latin letters (`చేయవచ్చుn`, `తయారుచేయగలిగేS`) are typing errors with no
-   safe repair. A Telugu number written right after a word (`క౦` meaning "ka 0") would be changed. I saw none.
+5. **Side effects:** recall 3/8. Other stray Latin letters (`చేయవచ్చుn`, `తయారుచేయగలిగేS`) or embedded Devanagari (`।`, Hindi tweet) are not look-alike anusvaras. A Telugu number written right after a word (`క౦` meaning "ka 0") would be changed. I saw none.
 
 ## No medicine: D3 mixed language
 
@@ -270,6 +268,6 @@ not judge it"), I give no medicine. 12 documents where D3 is the only label have
 
 - An automatic scan ran first on every document (detectors for A1–A6, B1–B5, C2, C3, D1, D3, E3, F1, G1, H1, H2). Then
   every line of every document was read, with hidden characters shown and each line marked with its character offset.
-  Every scan hit was confirmed or rejected by reading. For example, 115 C3 hits came down to 8; most were trailing
+  Every scan hit was confirmed or rejected by reading. For example, 115 C3 hits came down to 9; most were trailing
   bylines (C1).
 - The D4 and D5 labels are a reading judgement. Rows with D4 or D5 have `read=full`.
