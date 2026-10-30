@@ -131,7 +131,9 @@ class AlarmMonitor:
         self._ema_seen = 0
         self._tps_stats = _TrailingStats(tps_window)
         self._tps_slow_streak = 0
+        self._tps_last_step = None
         self._moe_bad_streak = {}
+        self._moe_last_step = {}
 
     def check(self, step, metric, value):
         """Check a single metric at `step` and return a list of alarm dicts."""
@@ -221,9 +223,13 @@ class AlarmMonitor:
                         self._ema_seen += 1
 
         # 4. Throughput drop on tokens_per_second (> 10% drop for 100 consecutive steps; skip step 0 setup).
-        if "tokens_per_second" in metrics and "tokens_per_second" not in nonfinite_names and step > 0:
+        # Patience streaks are tracked per metric: an invalid value or a step gap in that metric restarts them.
+        if "tokens_per_second" in metrics:
+            if self._tps_last_step is not None and step != self._tps_last_step + 1:
+                self._tps_slow_streak = 0
+            self._tps_last_step = step
             tps = _to_float(metrics["tokens_per_second"])
-            if tps is not None and tps > 0:
+            if step > 0 and tps is not None and math.isfinite(tps) and tps >= 0:
                 if len(self._tps_stats) >= 20:
                     mean_tps, _ = self._tps_stats.mean_std()
                     if tps < (1.0 - self.tps_drop_fraction) * mean_tps:
@@ -243,15 +249,33 @@ class AlarmMonitor:
                     else:
                         self._tps_slow_streak = 0
                         self._tps_stats.push(tps)
-                else:
+                elif tps > 0:
                     self._tps_stats.push(tps)
+            else:
+                self._tps_slow_streak = 0
 
         # 5. MoE routing health on expert_load (MaxVio > 1.0 or dead_experts > 0 for moe_patience steps).
-        if "expert_load" in metrics and "expert_load" not in nonfinite_names:
+        if "expert_load" in metrics:
             raw_load = metrics["expert_load"]
             layers = raw_load if isinstance(raw_load, dict) else {"all": raw_load}
+            if "expert_load" in nonfinite_names:
+                layers = dict.fromkeys(layers)  # treat every layer in this row as invalid
             for layer, loads in layers.items():
+                last = self._moe_last_step.get(layer)
+                if last is not None and step != last + 1:
+                    self._moe_bad_streak[layer] = 0
+                self._moe_last_step[layer] = step
                 if not isinstance(loads, (list, tuple)) and not hasattr(loads, "tolist"):
+                    self._moe_bad_streak[layer] = 0
+                    continue
+                if hasattr(loads, "tolist"):
+                    loads = loads.tolist()
+                if not isinstance(loads, (list, tuple)) or not loads:
+                    self._moe_bad_streak[layer] = 0
+                    continue
+                vals = [_to_float(x) for x in loads]
+                if any(x is None or not math.isfinite(x) or x < 0 for x in vals):
+                    self._moe_bad_streak[layer] = 0
                     continue
                 mv, dead = max_vio_and_dead(loads)
                 if mv > self.moe_max_vio_limit or dead > 0:

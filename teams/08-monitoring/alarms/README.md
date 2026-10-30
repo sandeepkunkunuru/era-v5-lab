@@ -6,8 +6,10 @@ and tests all rules on 3,000 synthetic steps.
 ```bash
 python -I teams/08-monitoring/alarms/alarms.py --synthetic 3000
 python -I teams/08-monitoring/alarms/alarms.py --jsonl teams/05-architecture/experiments/evidence/run_a/metrics.jsonl
-pytest teams/08-monitoring/alarms/test_alarms.py
+python -m pytest teams/08-monitoring/alarms/tests -q
 ```
+
+Tests require `pytest`, `numpy`, and `torch` in the active Python environment.
 
 In the Team 5 training loop (`train.py`):
 
@@ -35,6 +37,13 @@ for step in range(steps):
 | `ema_z` | `gradient_norm` | ZClip EMA z-score ($\alpha = 0.97$) $> z$ after 100 warmup steps (`ema_z_threshold`, off by default) | `warn` | Off by default: in Session 15's 300k-step test, $z = 2.5$ raised 201.9 false alarms per 10k steps while `spike_score` ($7\sigma / 1,000$) caught 40/40 spikes with 0 false alarms. Pass `ema_z_threshold=5.0` (0.43 false/10k) or `2.5` to enable. |
 | `throughput_drop` | `tokens_per_second` | $> 10\%$ below the trailing 100-step mean for 100 consecutive steps | `warn` | Skips `step == 0` setup time; fires once when the streak reaches 100 and resets when speed recovers. |
 | `moe_routing` | `expert_load` | $\text{MaxVio} > 1.0$ or $\text{dead\_experts} > 0$ for `moe_patience` consecutive steps (default 1,000) | `warn` | Accepts a single list of expert load fractions or a `{layer: [fractions]}` dict. |
+
+Input and reset behaviour:
+
+- Use `step` with a step's metrics, or `check` for one metric at a time; both may be mixed. Use a new monitor per run.
+- Throughput and MoE streaks are tracked per metric (per layer for MoE). A gap, repeat or backward step in that metric, or a null, malformed, negative or non-finite value, restarts the streak; baseline history is kept.
+- Zero throughput counts as a slowdown once 20 positive samples (after step 0) form a baseline; it never enters the baseline.
+- Severities are labels: the caller stops training and handles notifications. Spike events are returned on every qualifying step.
 
 ## 2. Results on 3,000 synthetic steps (`--synthetic 3000`)
 
