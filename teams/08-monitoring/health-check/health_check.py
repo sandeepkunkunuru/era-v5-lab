@@ -15,6 +15,7 @@ import argparse, json, sys
 
 SCHEMA = "v5-health/1"
 COLLECTIVE_SCHEMA = "g7-collective/1"
+COLLECTIVE_CHECKS = ("nccl_all_reduce", "nccl_reduce_scatter", "nccl_all_gather", "nccl_all_to_all")
 MODES = ("prolog", "periodic", "full")
 STATUSES = ("pass", "warn", "fail", "skipped")
 VERDICTS = ("pass", "warn", "fail")
@@ -23,15 +24,19 @@ XID_SOURCES = ("journalctl", "dmesg", "file")
 # Uncontained GPU/NVLink/memory faults: always fail and drain the node.
 FATAL_XIDS = {
     48: "double-bit ECC error (DBE)",
+    61: "internal micro-controller breakpoint",
+    62: "internal micro-controller halt",
     64: "row-remapping failure",
     74: "NVLink error",
     79: "GPU fell off the bus",
+    92: "high single-bit ECC error rate",
     95: "uncontained memory error",
     119: "GSP RPC timeout",
     120: "GSP error",
+    140: "unrecovered ECC error",
 }
-# Contained or row-remap events: Session 15 pages on 94; NVIDIA classifies 94 as contained
-# and 63 as a successful row remap. Either warn or fail is accepted, never pass.
+# Contained or row-remap events: first Xid 94 warns (restart job), a second on the same GPU
+# within 24 h fails and drains; 63 is a row-remap event. Either warn or fail is accepted, never pass.
 CONTAINED_XIDS = {
     63: "row-remapping event",
     94: "contained memory error",
@@ -167,13 +172,13 @@ def validate_check(c, idx, expected_gpus=0):
                 problems.append(f"{tag} passed with non-zero uncorrectable ECC values {vals}")
             if status == "fail" and vals and all(v == 0 for v in vals):
                 problems.append(f"{tag} failed with all-zero uncorrectable ECC values")
-    elif name == "nccl_all_reduce" and status == "pass":
+    elif name in COLLECTIVE_CHECKS and status == "pass":
         problems.extend(validate_collective(metrics))
-        if metrics.get("backend") != "nccl":
-            problems.append(f"{tag} cannot pass with backend={metrics.get('backend')!r}; CPU gloo is not GPU NCCL proof")
+        if expected_gpus > 0 and metrics.get("backend") != "nccl":
+            problems.append(f"{tag} cannot pass with backend={metrics.get('backend')!r} when expected_gpus > 0; CPU gloo is not GPU NCCL proof")
         ws = metrics.get("world_size")
         if isinstance(ws, int) and ws < 2:
-            problems.append(f"{tag} requires world_size >= 2 for inter-GPU collective proof")
+            problems.append(f"{tag} requires world_size >= 2 for collective proof")
     return problems
 
 
@@ -185,16 +190,21 @@ def validate_report(d):
         return validate_collective(d)
     if d.get("name") == "xid" and "schema" not in d:
         problems = []
-        if d.get("status") not in STATUSES:
+        status = d.get("status")
+        if status not in STATUSES:
             problems.append(f"xid.status must be one of {STATUSES}")
-        if d.get("source") not in XID_SOURCES:
+        src = d.get("source")
+        if status == "skipped":
+            if src is not None and src not in XID_SOURCES:
+                problems.append(f"xid.source must be one of {XID_SOURCES} or null when skipped")
+        elif src not in XID_SOURCES:
             problems.append(f"xid.source must be one of {XID_SOURCES}")
-        p, events = validate_xid_scan(d)
-        problems.extend(p)
-        if d.get("status") != "skipped":
+        if status != "skipped":
+            p, events = validate_xid_scan(d)
+            problems.extend(p)
             want = "fail" if any(e.get("severity") == "fail" for e in events if isinstance(e, dict)) else ("warn" if events else "pass")
-            if d.get("status") != want:
-                problems.append(f"xid.status is {d.get('status')!r}, expected {want!r}")
+            if status != want:
+                problems.append(f"xid.status is {status!r}, expected {want!r}")
         return problems
 
     problems = []
@@ -234,10 +244,12 @@ def validate_report(d):
         if not isinstance(d["admit_training"], bool):
             problems.append("admit_training must be bool")
         elif d["admit_training"]:
-            if want_verdict != "pass":
-                problems.append(f"admit_training cannot be True when verdict is {want_verdict!r}")
+            if want_verdict == "fail":
+                problems.append("admit_training cannot be True when verdict is 'fail'")
             elif expected_gpus > 0 and (not inv_checks or inv_checks[0].get("status") != "pass"):
                 problems.append("admit_training cannot be True when expected_gpus > 0 unless 'gpu_inventory' passed")
+            elif expected_gpus == 0 and want_verdict != "pass":
+                problems.append(f"admit_training cannot be True when expected_gpus == 0 and verdict is {want_verdict!r}")
 
     drain = d.get("drain_reason")
     if drain is not None and not isinstance(drain, str):
@@ -271,6 +283,7 @@ def to_clickhouse_row(d):
         "xid_codes": sorted(int(k) for k in (xid.get("counts") or {}) if str(k).isdigit()),
         "ecc_uncorrectable_total": sum(v for v in ecc if isinstance(v, int)),
         "nccl_status": nccl.get("status", "not_run"),
+        "runtime_seconds": float(d.get("runtime_seconds") or 0.0),
         "raw_json": json.dumps(d, sort_keys=True),
     }
 
@@ -306,7 +319,7 @@ def example_report(kind="prolog"):
         }
     checks = [
         {"name": "gpu_inventory", "status": "pass", "required": True, "reason": "",
-         "metrics": {"count": 8, "gpus": [f"{i}, GPU-{i:04d}, NVIDIA H100 80GB HBM3, 81559, 81000, 38" for i in range(8)]}},
+         "metrics": {"count": 8, "gpus": [f"{i}, GPU-{i:04d}, GPU-80GB, 81559, 81000, 38" for i in range(8)]}},
         {"name": "xid", "status": "pass", "required": True, "reason": "", "metrics": {"counts": {}, "events": []}},
         {"name": "ecc_uncorrectable", "status": "pass", "required": False, "reason": "", "metrics": {"values": [0] * 8}},
     ]
@@ -314,7 +327,7 @@ def example_report(kind="prolog"):
         checks += [
             {"name": "dcgm_quick", "status": "pass", "required": False, "reason": "Quick DCGM diagnostic exit code 0",
              "metrics": {"exit_code": 0, "output_tail": "Deployment: Pass"}},
-            {"name": "nvlink", "status": "pass", "required": False, "reason": "", "metrics": {}},
+            {"name": "nvlink", "status": "pass", "required": False, "reason": "", "metrics": {"links": 18, "inactive": 0, "down": 0}},
             {"name": "nccl_all_reduce", "status": "pass", "required": True, "reason": "",
              "metrics": {
                  "schema": COLLECTIVE_SCHEMA, "backend": "nccl", "world_size": 8, "status": "pass",
@@ -335,6 +348,7 @@ def example_report(kind="prolog"):
         "admit_training": True,
         "checks": checks,
         "drain_reason": None,
+        "runtime_seconds": 1.4,
     }
 
 
@@ -427,6 +441,30 @@ def selftest():
     r14["checks"] = [c for c in r14["checks"] if c["name"] != "gpu_inventory"]
     cases.append(("missing gpu_inventory with expected_gpus > 0 rejected",
                   any("gpu_inventory" in p for p in validate_report(r14))))
+
+    # 15. CPU host (expected_gpus == 0) allows gloo collectives with world_size >= 2.
+    r15 = example_report("full")
+    r15["expected_gpus"] = 0
+    r15["checks"][0]["metrics"] = {"count": 0, "gpus": []}
+    r15["checks"][-1]["metrics"]["backend"] = "gloo"
+    r15["checks"][-1]["metrics"]["world_size"] = 2
+    cases.append(("CPU host (expected_gpus=0) allows gloo collective", validate_report(r15) == []))
+
+    # 16. Prolog warn with passing gpu_inventory allows admit_training=True, but skipped gpu_inventory rejects it.
+    r16 = example_report("prolog")
+    r16["checks"].append({"name": "gpu_temperature", "status": "warn", "required": False, "reason": "86 C", "metrics": {}})
+    r16["verdict"] = "warn"
+    r16["admit_training"] = True
+    r16_no_inv = example_report("prolog")
+    r16_no_inv["checks"][0] = {"name": "gpu_inventory", "status": "skipped", "required": True, "reason": "no nvidia-smi", "metrics": {}}
+    r16_no_inv["verdict"] = "warn"
+    r16_no_inv["admit_training"] = True
+    cases.append(("warn admission allowed only when gpu_inventory passed",
+                  validate_report(r16) == [] and any("gpu_inventory" in p for p in validate_report(r16_no_inv))))
+
+    # 17. Skipped standalone xid_scan output allows source=None.
+    xid_skip = {"name": "xid", "status": "skipped", "source": None, "reason": "kernel log unreadable", "events": [], "counts": {}}
+    cases.append(("skipped standalone xid_scan allows source=None", validate_report(xid_skip) == []))
 
     failed = [name for name, ok in cases if not ok]
     for name, ok in cases:
