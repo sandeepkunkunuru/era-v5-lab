@@ -2,35 +2,30 @@
 
 Pack: 500 Telugu documents from FineWeb-2 (`tel_Telu`). All 500 read in full. Verdicts: 176 clean, 221 fix, 103 drop.
 
-**Harm test set.** The Telugu gold set from Data A / Data B is not in the repository yet. Every harm test below runs on a
-**proxy gold set: the 176 documents of this pack that I labelled `clean`**. At 176 documents, 1% is 1.76, so a medicine
-fails when it touches 2 or more. The test script takes a gold Parquet file as an argument, and I will re-run it on the
-real gold set when it is published.
+**Harm test set.** Every rule below is tested with `teams/02-data-b/tools/harm_test_indic.py` on the **real Telugu gold set (`teams/02-data-b/gold/telugu_gold.csv`: 46 two-reader clean documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, and `ind-te-sangraha-v` 23)**. Under the TSAI rule for small gold sets (`max(1%, 1 document)`), a rule passes when it changes or drops at most 1 of the 46 gold documents and passes both the ZWJ/ZWNJ joiner audit and the NFC/compatibility-character normal-form audit. I also report results on the 176 documents of `ind-te-fw2` that I labelled `clean`.
 
-Columns used below: *recall* = labelled documents that the medicine changes or drops; *fires on unlabelled* = documents in
-the pack without that label that the medicine changes or drops.
+Columns used below: *recall* = labelled documents in `ind-te-fw2` that the medicine changes or drops; *fires on unlabelled* = documents in `ind-te-fw2` without that label that the medicine changes or drops.
 
 ## Summary
 
-| Code | Count | Action | Gold changed | Gold dropped | Gold % | Result | Recall | Fires on unlabelled |
-|---|---|---|---|---|---|---|---|---|
-| C1 | 250 | fix | 0 | 0 | 0.0 | pass | 122/250 | 1 |
-| D4 | 87 | drop | 0 | 0 | 0.0 | pass | 83/87 | 18 (8 are D5) |
-| D3 | 83 | none | – | – | – | no medicine | – | – |
-| C2 | 41 | fix | 0 | 0 | 0.0 | pass | 17/41 | 13 |
-| C5 | 14 | drop | 0 | 1 | 0.6 | **rejected** (side effects) | 2/14 | 21 |
-| C3 | 9 | fix | 0 | 0 | 0.0 | pass | 1/9 | 1 |
-| B2 | 8 | fix | 0 | 0 | 0.0 | pass | 6/8 | 0 |
-| F3 | 8 | drop | 0 | 0 | 0.0 | pass | 7/8 | 0 |
-| C4 | 8 | drop | 0 | 0 | 0.0 | pass | 1/8 | 1 |
-| D5 | 8 | drop (by the D4 rule) | 0 | 0 | 0.0 | pass | 8/8 | – |
-| A6 | 8 | fix | 0 | 0 | 0.0 | pass | 3/8 | 3 |
-| F1 | 6 | fix | 1 | 0 | 0.6 | pass | 6/6 | 7 |
-| G1 | 4 | fix | 0 | 0 | 0.0 | pass | 4/4 | 0 |
+| Code | Count | Action | Gold changed (46) | Gold dropped (46) | Gold % | Joiner / Form audit | Result | Clean-slice (176) | Recall | Fires on unlabelled |
+|---|---|---|---|---|---|---|---|---|---|---|
+| C1 | 250 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 122/250 | 1 |
+| D4 | 87 | drop | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 81/87 | 18 (8 are D5) |
+| D3 | 83 | none | – | – | – | – | no medicine | – | – | – |
+| C2 | 41 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 17/41 | 13 |
+| C5 | 14 | drop | 0 | 0 | 0.00% | – | **rejected** (side effects) | 1/176 (0.6%) | 2/14 | 21 |
+| C3 | 9 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 1/9 | 1 |
+| B2 | 8 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 6/8 | 0 |
+| F3 | 8 | drop | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 7/8 | 0 |
+| C4 | 8 | drop | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 1/8 | 1 |
+| D5 | 8 | drop (by the D4 rule) | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 8/8 | – |
+| A6 | 8 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 3/8 | 3 |
+| F1 | 6 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 1/176 (0.6%) | 6/6 | 7 |
+| G1 | 4 | fix | 0 | 0 | 0.00% | ok / ok | **PASS** | 0/176 (0.0%) | 4/4 | 0 |
+| **ALL IN ORDER** | – | pipeline | **0** | **0** | **0.00%** | **ok / ok** | **PASS** | 1/176 (0.6%) | – | – |
 
-All medicines together, in the order F3, D4, C4, C1, C2, B2, G1, A6, C3, F1: they change or drop 1 of 176 proxy-gold
-documents (0.6%, the F1 case below), so the set passes too. The drop rules remove 84 of the 87 D4 documents, all 8 D5
-documents and all 8 F3 documents.
+All medicines together (`ALL IN ORDER` in `harm_test_indic.py`): **0 changed and 0 dropped out of 46 real Telugu gold documents (0.00%, PASS; ZWJ/ZWNJ audit PASS; normal-form audit PASS)**, and 1 changed out of 176 `ind-te-fw2` clean-slice documents (0.6%, the F1 helpline number below). The drop rules remove 82 of the 87 D4 documents, all 8 D5 documents and all 8 F3 documents.
 
 ## Medicine 1: C1 boilerplate
 
@@ -53,11 +48,15 @@ documents and all 8 F3 documents.
      | -?\s*\d{1,2}\s+\w{3}\s+\d{4}\s+\d{1,2}:\d{2}\s+[AP]M(?:\s+GMT)?.*
      | \w[\w\s.]{0,40},\s*News18,\s*\w+.*
    )\s*$""", re.X)
-   def c1_boilerplate(t, url):
-       return "\n".join(l for l in t.split("\n") if not C1_LINE.match(l)).strip()
+   def c1_boilerplate(t, url=None):
+       return "\n".join(l for l in t.split("\n") if not C1_LINE.match(l))
    ```
 3. **Action:** fix (delete the line).
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Note: omitting `.strip()` on the joined lines avoids stripping trailing spaces/newlines on clean `ind-te-sangraha-v` documents when no line matches `C1_LINE`. Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** recall is 122/250. Boilerplate that is glued into a paragraph, or that uses a phrase per site
    (headline lists, breadcrumb runs), is missed. A real sentence that starts with "Tags" or "Subscribe" would be deleted.
    I saw none in the pack.
@@ -70,25 +69,28 @@ documents and all 8 F3 documents.
 2. **Medicine:** two signals, and either one drops the document.
    - The host starts with `te.` on a non-Telugu site (`te.task1.info`, `te.aesbuc.pt`, …). These are auto-translation
      proxies of English or European sites. Wikimedia `te.` hosts are excluded.
-   - Calque density: at least 3 of (మరియు "and" + యొక్క "of"), and more than 15 per 1,000 words. Native Telugu joins clauses with suffixes
-     and the genitive case, and rarely writes these two words. Machine translation writes one for each English "and"
+   - Calque density: more than 15 per 1,000 words of (మరియు "and" + యొక్క "of"), with either at least 6 total calque tokens or at least 3 including `యొక్క`. Native Telugu joins clauses with suffixes
+     and the genitive case, and rarely writes `యొక్క` ("of"). Machine translation writes one for each English "and"
      and "of".
    ```python
+   from urllib.parse import urlparse
    WIKI = re.compile(r"^te\.(?:m\.)?wiki(?:pedia|source|books|quote|tionary|news)\.org$")
-   def d4_machine_translation(t, url):
+   def d4_machine_translation(t, url=None):
        host = urlparse(url or "").netloc.lower()
        if host.startswith("te.") and not WIKI.match(host):
-           return None
+           return True
        marks = t.count("మరియు") + t.count("యొక్క")
        rate = 1000 * marks / max(1, len(re.findall(r"\S+", t)))
-       return None if marks >= 3 and rate > 15 else t
+       return True if ((marks >= 6 or (marks >= 3 and "యొక్క" in t)) and rate > 15) else False
    ```
    Measured rate per 1,000 words (p10 / p50 / p90): D4+D5 documents 18.1 / 38.5 / 59.5; clean documents 0.0 / 0.0 / 0.8.
    40 of 95 D4+D5 documents have a `te.` host; 0 of 176 clean documents do.
 3. **Action:** drop.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass. Without the "at least 3" guard, the rule dropped
-   `d847afa42c9df584`, a clean 102-word rain bulletin: 2 మరియు gives a rate of 19.6. A short text's rate is noise.
-   The guard costs no recall (83/87 both ways).
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Without the `యొక్క` / `marks >= 6` guard on short texts, two short Sangraha gold documents (`ind-te-sangraha-s:685f75e6485e4b41` at 122 words with 5 `మరియు` and 0 `యొక్క`, and `ind-te-sangraha-v:a79a2ed6b823749b` at 146 words with 3 `మరియు` and 0 `యొక్క`) exceeded 15 per 1,000 words. Requiring `యొక్క` when `3 <= marks < 6` keeps 0/46 gold drops while retaining 81/87 D4 recall and 8/8 D5 recall.
 5. **Side effects:** it also drops 18 documents not labelled D4, 14 of them labelled `fix`. 8 are labelled D5 (translated bank, insurance
    and health pages; `narendramodi.in/te`). Native prose with many lists ("A మరియు B మరియు C") can pass 15. Very short
    documents have a noisy rate. A Telugu site that serves its own content on a `te.` host would be dropped.
@@ -101,7 +103,8 @@ documents and all 8 F3 documents.
 2. **Medicine:** keep the first copy of each line (15 characters or more after strip) that occurs 2 or more times, and
    delete the later copies.
    ```python
-   def c2_repeats(t, url):
+   from collections import Counter
+   def c2_repeats(t, url=None):
        lines = t.split("\n"); n = Counter(l.strip() for l in lines if len(l.strip()) >= 15)
        seen, out = set(), []
        for l in lines:
@@ -113,8 +116,11 @@ documents and all 8 F3 documents.
        return "\n".join(out)
    ```
 3. **Action:** fix.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass. No clean document repeats any line of 15+ characters.
-   I also tested a threshold of 3 copies: recall fell from 17/41 to 10/41.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%). I also tested a threshold of 3 copies: recall fell from 17/41 to 10/41.
 5. **Side effects:** recall 17/41. Readers also labelled repeats inside a line (a title repeated in the first sentence)
    and short repeated lines, and this rule cannot see those. A poem or song with a refrain would lose the refrain.
 
@@ -142,11 +148,15 @@ documents and all 8 F3 documents.
    dependent sign must follow a consonant.
    ```python
    G1_RX = re.compile(r"(?m)(^|\s)[ా-ౖఁ-ఃౢౣ]+")
-   def g1_orphan_signs(t, url):
+   def g1_orphan_signs(t, url=None):
        return G1_RX.sub(r"\1", t)
    ```
 3. **Action:** fix.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** recall 4/4 on orphan matras/viramas. A space put *inside* a word before a consonant (`అం దిస్తారు`, `ఉద్య మం`) or a legacy-font conjunct substitution (`నేనేనువ్ఞ్వ`, G2) is not detectable by a whitespace-matra rule without a dictionary, so it stays. Deleting the orphan sign leaves the word
    misspelt. It does not restore the word. Re-attaching the sign to the previous consonant would be riskier.
 
@@ -158,11 +168,15 @@ documents and all 8 F3 documents.
 2. **Medicine:**
    ```python
    B2_RX = re.compile(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]{0,300})?/?>|<>|\b(?:width|height|class|style)=\"[^\"]*\"")
-   def b2_html(t, url):
+   def b2_html(t, url=None):
        return B2_RX.sub("", t)
    ```
 3. **Action:** fix.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** text that discusses HTML (a tutorial that shows `<div>`) would lose its examples. Broken tag
    fragments with no `<` (`- 24>`) are missed.
 
@@ -178,11 +192,15 @@ documents and all 8 F3 documents.
                        r"|satta|casino|betting", re.I)
    F3_RX = re.compile(r"sex\s*stor|porn|xxx|\bnude\b|దెంగ|పూకు|మొడ్డ|బూతు\s*కథ|సెక్స్\s*కథ|prize\s*bond|satta\s*matka"
                       r"|betting\s*tips", re.I)
-   def f3_harmful(t, url):
-       return None if F3_URL.search(url or "") or len(F3_RX.findall(t)) >= 3 else t
+   def f3_harmful(t, url=None):
+       return True if (F3_URL.search(url or "") or len(F3_RX.findall(t)) >= 3) else False
    ```
 3. **Action:** drop.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** recall 7/8. It misses `te.hunterschool.org` (a manipulative dating guide with no keyword). The
    first version of the URL pattern matched "Sus**sex**" in a cricket story. The `(?<![a-z])` guard fixes that, but
    other substrings can still collide. A news report *about* betting or pornography laws would be dropped if its URL
@@ -198,11 +216,15 @@ documents and all 8 F3 documents.
    ```python
    C4_RX = re.compile(r"(?m)(?:\d+\s+(?:min|mins|hours?)\s+ago|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct"
                       r"|Nov|Dec)\w*\s+\d{4})")
-   def c4_feed(t, url):
-       return None if len(C4_RX.findall(t)) >= 3 else t
+   def c4_feed(t, url=None):
+       return True if len(C4_RX.findall(t)) >= 3 else False
    ```
 3. **Action:** drop.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** recall 1/8 alone, 3/8 in the pipeline. Most joins have no marker at all: two stories run on with
    no boundary. Finding them needs a topic-shift model, not a rule. A timeline article with many dates would be dropped.
 
@@ -212,15 +234,19 @@ documents and all 8 F3 documents.
    `232615716ef393f4` `ఈ మద్య సం` stops mid-word at offset 875; `2311ca6e49dffc35` `వేసుక..` at offset 300.
 2. **Medicine:** when the last paragraph ends in `[…]` or `[...]`, delete that paragraph.
    ```python
-   def c3_teaser(t, url):
+   def c3_teaser(t, url=None):
        paras = t.rstrip().split("\n")
        if len(paras) > 1 and re.search(r"\[(?:…|\.\.\.)\]\s*$", paras[-1]):
            return "\n".join(paras[:-1]).rstrip()
        return t
    ```
 3. **Action:** fix.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass. The first version also cut paragraphs that end in `..`
-   or `…`. It changed 2 gold documents (1.2%) and **failed**: Telugu writers end sentences with `..` and `…` as a style
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%). The first version also cut paragraphs that end in `..`
+   or `…`. It changed 2 clean-slice documents (1.2%) and **failed**: Telugu writers end sentences with `..` and `…` as a style
    (`తో పాటు..`, `కొట్లాడతాం…`).
 5. **Side effects:** recall 1/9. A cut in the middle of a word or sentence with no marker is not detectable by a rule.
    The automatic scan flagged 115 documents for "no end punctuation", and reading confirmed 9.
@@ -232,13 +258,16 @@ documents and all 8 F3 documents.
 2. **Medicine:** delete Indian mobile numbers and e-mail addresses.
    ```python
    F1_RX = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+|(?<!\d)(?:\+91[\s-]?|0)?[6-9]\d{4}[\s-]?\d{5}(?!\d)")
-   def f1_pii(t, url):
+   def f1_pii(t, url=None):
        return F1_RX.sub("", t)
    ```
 3. **Action:** fix (delete the value, keep the document). I delete rather than write a placeholder token, so that no
    new marker string enters the training text.
-4. **Harm test:** proxy gold: 1 changed, 0 dropped (0.6%). Pass. The changed document is `c5a74a6de69221b8`, which has a
-   public helpline number that the reader did not count as personal data.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 1 changed (`c5a74a6de69221b8`, a public helpline number), 0 dropped (0.6%).
 5. **Side effects:** it also deletes public numbers (helplines, offices) and company e-mail addresses, 7 documents in
    the pack. That cost is accepted for privacy. It misses landlines, addresses and ID numbers.
 
@@ -251,11 +280,15 @@ documents and all 8 F3 documents.
    consonant, a space or punctuation, becomes anusvara U+0C02.
    ```python
    A6_RX = re.compile(r"(?<=[క-హా-ౌ])[o౦](?=[క-హ]|\s|[.,!?]|$)")
-   def a6_lookalike(t, url):
+   def a6_lookalike(t, url=None):
        return A6_RX.sub("ం", t)
    ```
 3. **Action:** fix.
-4. **Harm test:** proxy gold: 0 changed, 0 dropped (0.0%). Pass.
+4. **Harm test:** real Telugu gold set (`telugu_gold.csv`, 46 documents across `ind-te-fw2` 18, `ind-te-sangraha-s` 5, `ind-te-sangraha-v` 23):
+   - Changed 0 of 46 (0.00%). Dropped 0 of 46 (0.00%). **PASS**
+   - ZWJ/ZWNJ audit: 0 changed documents with a different count. **PASS**
+   - Normal-form audit: 0 changed documents left NFC or lost a compatibility character. **PASS**
+   - Clean slice (`ind-te-fw2`, 176 docs): 0 changed, 0 dropped (0.0%).
 5. **Side effects:** recall 3/8. Other stray Latin letters (`చేయవచ్చుn`, `తయారుచేయగలిగేS`) or embedded Devanagari (`।`, Hindi tweet) are not look-alike anusvaras. A Telugu number written right after a word (`క౦` meaning "ka 0") would be changed. I saw none.
 
 ## No medicine: D3 mixed language
