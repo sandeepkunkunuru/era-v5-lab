@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""Load Team 5 JSONL experiment logs and Team 6 benchmark run JSON/JSONL files into ClickHouse.
+
+Usage:
+    python -I teams/08-monitoring/clickhouse/load_jsonl.py --defaults
+    python -I teams/08-monitoring/clickhouse/load_jsonl.py \
+        teams/05-architecture/experiments/evidence/run_a/ \
+        teams/05-architecture/experiments/evidence/run_b/ \
+        teams/06-performance/results/modal_gpu/h200_v1.json
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timedelta, timezone
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_CH_URL = os.environ.get("CLICKHOUSE_URL", "http://127.0.0.1:8123")
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[2]
+
+DEFAULT_SOURCES = (
+    "teams/05-architecture/experiments/evidence/run_a/metrics.jsonl",
+    "teams/05-architecture/experiments/evidence/run_b/metrics.jsonl",
+    "teams/06-performance/results/modal_gpu/h200_v1.json",
+)
+
+EPOCH_BASE = datetime(2026, 10, 28, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def ch_Exec(sql: str, data: bytes | None = None, url: str = DEFAULT_CH_URL) -> str:
+    """Execute a SQL statement (with optional POST body) against ClickHouse over HTTP."""
+    params = urllib.parse.urlencode({"wait_end_of_query": 1})
+    req_url = f"{url.rstrip('/')}/?{params}"
+    body = sql.encode("utf-8") if data is None else sql.encode("utf-8") + b"\n" + data
+    req = urllib.request.Request(req_url, data=body, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ClickHouse HTTP {exc.code}: {detail.strip()}") from exc
+
+
+def execute_sql_file(path: Path, url: str = DEFAULT_CH_URL) -> None:
+    """Execute each semicolon-terminated statement in a .sql file."""
+    text = path.read_text(encoding="utf-8")
+    lines = [
+        line for line in text.splitlines()
+        if not line.strip().startswith("--")
+    ]
+    cleaned = "\n".join(lines)
+    for stmt in cleaned.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            ch_Exec(stmt, url=url)
+
+
+def ensure_schema(url: str = DEFAULT_CH_URL) -> None:
+    schema_path = HERE / "schema_v1.sql"
+    rollups_path = HERE / "rollups_v1.sql"
+    if schema_path.exists():
+        execute_sql_file(schema_path, url=url)
+    if rollups_path.exists():
+        execute_sql_file(rollups_path, url=url)
+
+
+def _format_utc(dt: datetime) -> str:
+    dt_utc = dt.astimezone(timezone.utc)
+    return dt_utc.strftime("%Y-%m-%d %H:%M:%S.") + f"{dt_utc.microsecond // 1000:03d}"
+
+
+def _parse_time(raw_time: object, fallback_dt: datetime) -> datetime:
+    if isinstance(raw_time, (int, float)) and not isinstance(raw_time, bool) and math.isfinite(raw_time):
+        return datetime.fromtimestamp(float(raw_time), tz=timezone.utc)
+    if isinstance(raw_time, str) and raw_time.strip():
+        s = raw_time.strip()
+        if s.endswith(" UTC"):
+            s = s[:-4] + "+00:00"
+        elif s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return fallback_dt
+
+
+def _to_nullable_float(val: object) -> float | None:
+    """Convert a JSON scalar to a finite float, or None for null / NaN / Inf."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return 1.0 if val else 0.0
+    if isinstance(val, (int, float)):
+        f = float(val)
+        return f if math.isfinite(f) else None
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("nan", "inf", "-inf", "+inf", "infinity", "-infinity", "null", "none", ""):
+            return None
+        try:
+            f = float(s)
+            return f if math.isfinite(f) else None
+        except ValueError:
+            return None
+    return None
+
+
+def resolve_source_text(source: str) -> tuple[str, str, str]:
+    """Return `(canonical_source, default_run_id, text_content)` from disk or git ref."""
+    p = Path(source)
+    if not p.is_absolute():
+        cand = REPO_ROOT / p
+        if cand.exists():
+            p = cand
+
+    if p.exists() and p.is_dir():
+        jsonl_cand = p / "metrics.jsonl"
+        if jsonl_cand.exists():
+            p = jsonl_cand
+
+    if p.exists() and p.is_file():
+        try:
+            rel = str(p.resolve().relative_to(REPO_ROOT.resolve()))
+        except ValueError:
+            rel = str(p)
+        run_id = p.parent.name if p.name == "metrics.jsonl" else p.stem
+        return rel, run_id, p.read_text(encoding="utf-8")
+
+    # Fallback: check git refs (e.g. `pr-135:<path>` or unmerged PR #135 files).
+    git_spec = source[4:] if source.startswith("git:") else source
+    if git_spec.endswith("/"):
+        git_spec = f"{git_spec}metrics.jsonl"
+    candidates = [git_spec] if ":" in git_spec else [
+        f"pr-135:{git_spec}",
+        f"upstream/main:{git_spec}",
+        f"HEAD:{git_spec}",
+    ]
+    for spec in candidates:
+        res = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "show", spec],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout and not res.stdout.startswith("tree "):
+            rel_path = spec.split(":", 1)[1]
+            pp = Path(rel_path)
+            run_id = pp.parent.name if pp.name == "metrics.jsonl" else pp.stem
+            return rel_path, run_id, res.stdout
+
+    raise FileNotFoundError(f"Cannot find source file on disk or in git refs: {source}")
+
+
+def _parse_jsonl_content(text: str, default_run_id: str, run_id_override: str | None = None) -> dict:
+    raw_lines = [ln for ln in text.splitlines() if ln.strip()]
+    rows: list[dict] = []
+    null_rows = 0
+    resolved_run_id = run_id_override or default_run_id
+
+    for idx, line in enumerate(raw_lines):
+        rec = json.loads(line)
+        if not isinstance(rec, dict):
+            raise ValueError(f"Line {idx + 1} is not a JSON object")
+
+        if not run_id_override and isinstance(rec.get("run_id"), str) and rec["run_id"].strip():
+            resolved_run_id = rec["run_id"].strip()
+
+        step_raw = rec.get("step", idx)
+        step = int(step_raw) if isinstance(step_raw, (int, float)) and not isinstance(step_raw, bool) else idx
+        fallback_dt = EPOCH_BASE + timedelta(seconds=idx)
+        dt = _parse_time(rec.get("time", rec.get("timestamp")), fallback_dt)
+        time_str = _format_utc(dt)
+
+        rank_raw = rec.get("rank", 0)
+        if isinstance(rec.get("gpu"), dict) and isinstance(rec["gpu"].get("index"), int):
+            rank_raw = rec["gpu"]["index"]
+        rank = int(rank_raw) if isinstance(rank_raw, int) and not isinstance(rank_raw, bool) and rank_raw >= 0 else 0
+
+        event = rec.get("event")
+        # 1. Tall single-metric JSONL line: {"step": ..., "name": ..., "value": ...}
+        if "name" in rec and "value" in rec and isinstance(rec["name"], str):
+            val = _to_nullable_float(rec["value"])
+            if val is None:
+                null_rows += 1
+            rows.append({
+                "run_id": resolved_run_id,
+                "step": step,
+                "time": time_str,
+                "name": rec["name"],
+                "value": val,
+                "rank": rank,
+            })
+            continue
+
+        # 2. Team 6 live `gpu_sample` JSONL line
+        if event == "gpu_sample" and isinstance(rec.get("metrics"), dict):
+            m_dict = dict(rec["metrics"])
+            if "gpu_util_pct" in m_dict and "gpu_utilization" not in m_dict:
+                m_dict["gpu_utilization"] = m_dict["gpu_util_pct"]
+            if "mem_used_mib" in m_dict and "gpu_memory_used" not in m_dict:
+                mib = _to_nullable_float(m_dict["mem_used_mib"])
+                m_dict["gpu_memory_used"] = mib * 1048576.0 if mib is not None else None
+            for m_name, m_val in m_dict.items():
+                val = _to_nullable_float(m_val)
+                if val is None:
+                    null_rows += 1
+                rows.append({
+                    "run_id": resolved_run_id,
+                    "step": step,
+                    "time": time_str,
+                    "name": str(m_name),
+                    "value": val,
+                    "rank": rank,
+                })
+            continue
+
+        # 3. Team 6 live `step_timing` JSONL line
+        if event == "step_timing":
+            for m_name in ("data_ms", "raw_step_ms"):
+                if m_name in rec:
+                    val = _to_nullable_float(rec[m_name])
+                    if val is None:
+                        null_rows += 1
+                    rows.append({
+                        "run_id": resolved_run_id,
+                        "step": step,
+                        "time": time_str,
+                        "name": m_name,
+                        "value": val,
+                        "rank": rank,
+                    })
+            if "data_ms" in rec:
+                dms = _to_nullable_float(rec["data_ms"])
+                rows.append({
+                    "run_id": resolved_run_id,
+                    "step": step,
+                    "time": time_str,
+                    "name": "loader_wait_time",
+                    "value": dms / 1000.0 if dms is not None else None,
+                    "rank": rank,
+                })
+                if dms is None:
+                    null_rows += 1
+            continue
+
+        # 4. Standard wide per-step JSONL line (Team 5 `train.py` or `MetricsWriter`)
+        skip_keys = {
+            "step", "time", "timestamp", "run_id", "node_id", "rank", "local_rank",
+            "schema_version", "event", "mfu_unavailable_reason", "hfu_unavailable_reason",
+        }
+        line_metrics = 0
+        for k, v in rec.items():
+            if k in skip_keys:
+                continue
+            if isinstance(v, (list, tuple)):
+                for sub_i, sub_v in enumerate(v):
+                    val = _to_nullable_float(sub_v)
+                    if val is None:
+                        null_rows += 1
+                    rows.append({
+                        "run_id": resolved_run_id,
+                        "step": step,
+                        "time": time_str,
+                        "name": f"{k}.{sub_i}",
+                        "value": val,
+                        "rank": rank,
+                    })
+                    line_metrics += 1
+            elif isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    if isinstance(sub_v, (list, tuple)):
+                        for sub_i, item_v in enumerate(sub_v):
+                            val = _to_nullable_float(item_v)
+                            if val is None:
+                                null_rows += 1
+                            rows.append({
+                                "run_id": resolved_run_id,
+                                "step": step,
+                                "time": time_str,
+                                "name": f"{k}.{sub_k}.{sub_i}",
+                                "value": val,
+                                "rank": rank,
+                            })
+                            line_metrics += 1
+                    else:
+                        val = _to_nullable_float(sub_v)
+                        if val is None:
+                            null_rows += 1
+                        rows.append({
+                            "run_id": resolved_run_id,
+                            "step": step,
+                            "time": time_str,
+                            "name": f"{k}.{sub_k}",
+                            "value": val,
+                            "rank": rank,
+                        })
+                        line_metrics += 1
+            else:
+                val = _to_nullable_float(v)
+                if val is None:
+                    null_rows += 1
+                rows.append({
+                    "run_id": resolved_run_id,
+                    "step": step,
+                    "time": time_str,
+                    "name": str(k),
+                    "value": val,
+                    "rank": rank,
+                })
+                line_metrics += 1
+
+        if line_metrics == 0:
+            null_rows += 1
+            rows.append({
+                "run_id": resolved_run_id,
+                "step": step,
+                "time": time_str,
+                "name": "_empty_line",
+                "value": None,
+                "rank": rank,
+            })
+
+    return {
+        "run_id": resolved_run_id,
+        "jsonl_lines": len(raw_lines),
+        "metric_rows": len(rows),
+        "null_rows": null_rows,
+        "rows": rows,
+    }
+
+
+def _parse_team6_run_json(text: str, default_run_id: str, run_id_override: str | None = None) -> dict:
+    doc = json.loads(text)
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    resolved_run_id = run_id_override or meta.get("tag") or default_run_id
+    base_dt = _parse_time(meta.get("time"), EPOCH_BASE)
+
+    rows: list[dict] = []
+    null_rows = 0
+
+    def add(step: int, dt: datetime, name: str, raw_val: object, rank: int = 0) -> None:
+        nonlocal null_rows
+        val = _to_nullable_float(raw_val)
+        if val is None:
+            null_rows += 1
+        rows.append({
+            "run_id": resolved_run_id,
+            "step": step,
+            "time": _format_utc(dt),
+            "name": name,
+            "value": val,
+            "rank": rank,
+        })
+
+    clean = doc.get("clean") if isinstance(doc.get("clean"), dict) else {}
+    raw_steps = clean.get("raw_step_ms")
+    if isinstance(raw_steps, dict):
+        raw_steps = raw_steps.get("values")
+    if not isinstance(raw_steps, list):
+        raw_steps = []
+
+    elapsed_ms = 0.0
+    for s_idx, step_ms in enumerate(raw_steps):
+        ms_val = _to_nullable_float(step_ms)
+        if ms_val is not None and ms_val > 0:
+            elapsed_ms += ms_val
+        else:
+            elapsed_ms += 100.0
+        step_dt = base_dt + timedelta(milliseconds=elapsed_ms)
+        add(s_idx, step_dt, "step_ms", step_ms)
+
+    summary_step = max(0, len(raw_steps) - 1)
+    summary_dt = base_dt + timedelta(milliseconds=elapsed_ms)
+
+    # Summary KPIs from `metrics`
+    metrics_sec = doc.get("metrics") if isinstance(doc.get("metrics"), dict) else {}
+    for k in (
+        "tokens_per_step", "tokens_per_s", "model_flops_per_token",
+        "hw_flops_per_token", "params_total", "params_active",
+        "peak_tflops", "model_tflops_per_s", "mfu", "hfu",
+    ):
+        if k in metrics_sec:
+            add(summary_step, summary_dt, k, metrics_sec[k])
+    if "mfu" in metrics_sec:
+        add(summary_step, summary_dt, "model_flops_utilization", metrics_sec["mfu"])
+    if "tokens_per_s" in metrics_sec:
+        add(summary_step, summary_dt, "tokens_per_second", metrics_sec["tokens_per_s"])
+
+    # Clean step & data wait summary stats
+    for sec_name in ("step_ms", "data_ms"):
+        stats = clean.get(sec_name)
+        if isinstance(stats, dict):
+            for stat_k in ("median", "p10", "p90", "mean", "min", "max"):
+                if stat_k in stats:
+                    add(summary_step, summary_dt, f"clean.{sec_name}.{stat_k}", stats[stat_k])
+            if sec_name == "data_ms" and "median" in stats:
+                dms = _to_nullable_float(stats["median"])
+                add(summary_step, summary_dt, "loader_wait_time", dms / 1000.0 if dms is not None else None)
+
+    # Memory stats
+    mem_sec = doc.get("memory") if isinstance(doc.get("memory"), dict) else {}
+    for k in ("peak_allocated_gb", "peak_reserved_gb"):
+        if k in mem_sec:
+            add(summary_step, summary_dt, f"memory.{k}", mem_sec[k])
+    if "peak_allocated_gb" in mem_sec:
+        add(summary_step, summary_dt, "gpu_alloc_gb", mem_sec["peak_allocated_gb"])
+
+    # Trace stats
+    trace_sec = doc.get("trace") if isinstance(doc.get("trace"), dict) else {}
+    for k in ("gpu_busy_pct", "host_syncs_per_step", "kernels_per_step"):
+        if k in trace_sec:
+            add(summary_step, summary_dt, f"trace.{k}", trace_sec[k])
+
+    # 1 Hz GPU system telemetry summary stats
+    sys_sec = doc.get("system") if isinstance(doc.get("system"), dict) else {}
+    sys_metrics = sys_sec.get("metrics") if isinstance(sys_sec.get("metrics"), dict) else {}
+    for m_name, m_stats in sys_metrics.items():
+        if isinstance(m_stats, dict):
+            for stat_k in ("min", "median", "max", "mean"):
+                if stat_k in m_stats:
+                    add(summary_step, summary_dt, f"system.{m_name}.{stat_k}", m_stats[stat_k])
+            if "median" in m_stats:
+                add(summary_step, summary_dt, m_name, m_stats["median"])
+                if m_name == "gpu_util_pct":
+                    add(summary_step, summary_dt, "gpu_utilization", m_stats["median"])
+        else:
+            add(summary_step, summary_dt, m_name, m_stats)
+    if "mem_used_mib" in sys_metrics and isinstance(sys_metrics["mem_used_mib"], dict):
+        max_mib = _to_nullable_float(sys_metrics["mem_used_mib"].get("max"))
+        add(
+            summary_step,
+            summary_dt,
+            "gpu_memory_used",
+            max_mib * 1048576.0 if max_mib is not None else None,
+        )
+
+    line_count = len(raw_steps) if raw_steps else 1
+    return {
+        "run_id": resolved_run_id,
+        "jsonl_lines": line_count,
+        "metric_rows": len(rows),
+        "null_rows": null_rows,
+        "rows": rows,
+    }
+
+
+def parse_source(source: str, run_id_override: str | None = None) -> dict:
+    """Parse a JSONL or Team 6 JSON source into ClickHouse rows and line/row counts."""
+    canonical_source, default_run_id, text = resolve_source_text(source)
+    stripped = text.lstrip()
+    # Team 6 benchmark summary JSON vs line-delimited JSONL
+    if canonical_source.endswith(".json") and not canonical_source.endswith(".jsonl"):
+        parsed = _parse_team6_run_json(text, default_run_id, run_id_override)
+    elif "\n" not in stripped.rstrip() and stripped.startswith("{") and '"clean"' in stripped and '"meta"' in stripped:
+        parsed = _parse_team6_run_json(text, default_run_id, run_id_override)
+    else:
+        parsed = _parse_jsonl_content(text, default_run_id, run_id_override)
+    parsed["source_file"] = canonical_source
+    return parsed
+
+
+def load_source(source: str, run_id_override: str | None = None, url: str = DEFAULT_CH_URL) -> dict:
+    """Parse `source` and load its rows into ClickHouse `metrics_raw` and `ingest_manifest`."""
+    ensure_schema(url=url)
+    parsed = parse_source(source, run_id_override=run_id_override)
+    run_id = parsed["run_id"]
+    source_file = parsed["source_file"]
+    safe_run = run_id.replace("'", "''")
+    safe_src = source_file.replace("'", "''")
+
+    # Idempotent reload: remove previous rows for this `run_id` before inserting.
+    ch_Exec(
+        f"ALTER TABLE metrics_raw DELETE WHERE run_id = '{safe_run}' SETTINGS mutations_sync = 2",
+        url=url,
+    )
+    ch_Exec(
+        f"ALTER TABLE ingest_manifest DELETE WHERE run_id = '{safe_run}' AND source_file = '{safe_src}' SETTINGS mutations_sync = 2",
+        url=url,
+    )
+
+    payload_lines = [json.dumps(r, separators=(",", ":")) for r in parsed["rows"]]
+    if payload_lines:
+        body = ("\n".join(payload_lines) + "\n").encode("utf-8")
+        ch_Exec("INSERT INTO metrics_raw FORMAT JSONEachRow", data=body, url=url)
+
+    manifest_row = {
+        "run_id": run_id,
+        "source_file": source_file,
+        "jsonl_lines": parsed["jsonl_lines"],
+        "metric_rows": parsed["metric_rows"],
+        "null_rows": parsed["null_rows"],
+    }
+    ch_Exec(
+        "INSERT INTO ingest_manifest (run_id, source_file, jsonl_lines, metric_rows, null_rows) FORMAT JSONEachRow",
+        data=(json.dumps(manifest_row) + "\n").encode("utf-8"),
+        url=url,
+    )
+    return {
+        "run_id": run_id,
+        "source_file": source_file,
+        "jsonl_lines": parsed["jsonl_lines"],
+        "metric_rows": parsed["metric_rows"],
+        "null_rows": parsed["null_rows"],
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Load Team 5 JSONL and Team 6 JSON runs into ClickHouse.")
+    ap.add_argument("sources", nargs="*", help="JSONL files, run directories, or Team 6 JSON files to load")
+    ap.add_argument("--defaults", action="store_true", help="Load Team 5 run_a, run_b and Team 6 PR #135 h200_v1.json")
+    ap.add_argument("--run-id", default=None, help="Explicit run_id override (when loading a single source)")
+    ap.add_argument("--url", default=DEFAULT_CH_URL, help=f"ClickHouse HTTP URL (default: {DEFAULT_CH_URL})")
+    args = ap.parse_args(argv)
+
+    targets = list(args.sources)
+    if args.defaults or not targets:
+        targets.extend(DEFAULT_SOURCES)
+
+    if args.run_id and len(targets) > 1:
+        print("error: --run-id can only be used when loading a single file", file=sys.stderr)
+        return 2
+
+    for src in targets:
+        info = load_source(src, run_id_override=args.run_id, url=args.url)
+        print(
+            f"loaded run_id={info['run_id']!r} source={info['source_file']} "
+            f"lines={info['jsonl_lines']} metric_rows={info['metric_rows']} null_rows={info['null_rows']}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
