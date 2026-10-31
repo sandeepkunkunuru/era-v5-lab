@@ -221,3 +221,20 @@ def test_step_gap_resets_both_throughput_and_moe():
         assert mon.step(step, tokens_per_second=75.0, expert_load=BAD_LOAD) == []
     out = mon.step(26, tokens_per_second=75.0, expert_load=BAD_LOAD)
     assert {a["rule"] for a in out} == {"throughput_drop", "moe_routing"}
+
+
+def test_static_bound_latches_and_rearms():
+    mon = AlarmMonitor(bounds={"docs_dropped": (None, 10.0), "gpu_temp_c": (10.0, 85.0)})
+    assert mon.step(0, docs_dropped=5.0, gpu_temp_c=65.0) == []
+    # Crossing above hi fires once and latches across subsequent cumulative increases.
+    a1 = mon.step(1, docs_dropped=11.0, gpu_temp_c=65.0)
+    assert len(a1) == 1 and a1[0]["rule"] == "static_bound" and a1[0]["metric"] == "docs_dropped"
+    assert mon.step(2, docs_dropped=15.0, gpu_temp_c=65.0) == []
+    # Crossing below lo on gpu_temp_c fires once, then re-arms after returning in-bounds.
+    a2 = mon.step(3, docs_dropped=15.0, gpu_temp_c=5.0)
+    assert len(a2) == 1 and a2[0]["rule"] == "static_bound" and a2[0]["metric"] == "gpu_temp_c"
+    assert mon.step(4, docs_dropped=15.0, gpu_temp_c=4.0) == []
+    assert mon.step(5, docs_dropped=15.0, gpu_temp_c=60.0) == []
+    a3 = mon.step(6, docs_dropped=15.0, gpu_temp_c=90.0)
+    assert len(a3) == 1 and a3[0]["rule"] == "static_bound" and a3[0]["metric"] == "gpu_temp_c"
+

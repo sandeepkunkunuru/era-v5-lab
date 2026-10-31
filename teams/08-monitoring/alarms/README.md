@@ -37,6 +37,7 @@ for step in range(steps):
 | `ema_z` | `gradient_norm` | ZClip EMA z-score ($\alpha = 0.97$) $> z$ after 100 warmup steps (`ema_z_threshold`, off by default) | `warn` | Off by default: in Session 15's 300k-step test, $z = 2.5$ raised 201.9 false alarms per 10k steps while `spike_score` ($7\sigma / 1,000$) caught 40/40 spikes with 0 false alarms. Pass `ema_z_threshold=5.0` (0.43 false/10k) or `2.5` to enable. |
 | `throughput_drop` | `tokens_per_second` | $> 10\%$ below the trailing 100-step mean for 100 consecutive steps | `warn` | Skips `step == 0` setup time; fires once when the streak reaches 100 and resets when speed recovers. |
 | `moe_routing` | `expert_load` | $\text{MaxVio} > 1.0$ or $\text{dead\_experts} > 0$ for `moe_patience` consecutive steps (default 1,000) | `warn` | Accepts a single list of expert load fractions or a `{layer: [fractions]}` dict. |
+| `static_bound` | any scalar in `bounds={name: (lo, hi)}` | Value $< \text{lo}$ or $> \text{hi}$ (optional, folded in from `@rahulsharmaf81` PR #122) | `warn` | Edge-triggered latch: fires once on crossing and re-arms only when the metric returns in-bounds, so cumulative counters do not re-fire on every subsequent step. |
 
 Input and reset behaviour:
 

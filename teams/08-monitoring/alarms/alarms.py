@@ -113,6 +113,7 @@ class AlarmMonitor:
         tps_patience=100,
         moe_max_vio_limit=1.0,
         moe_patience=1000,
+        bounds=None,
     ):
         self.window = window
         self.min_window = min(min_window, window)
@@ -124,6 +125,7 @@ class AlarmMonitor:
         self.tps_patience = tps_patience
         self.moe_max_vio_limit = moe_max_vio_limit
         self.moe_patience = moe_patience
+        self.bounds = dict(bounds) if bounds else {}
 
         self._trailing = {m: _TrailingStats(window) for m in SPIKE_METRICS}
         self._ema_mu = None
@@ -134,6 +136,7 @@ class AlarmMonitor:
         self._tps_last_step = None
         self._moe_bad_streak = {}
         self._moe_last_step = {}
+        self._bound_latched = set()
 
     def check(self, step, metric, value):
         """Check a single metric at `step` and return a list of alarm dicts."""
@@ -294,6 +297,45 @@ class AlarmMonitor:
                         })
                 else:
                     self._moe_bad_streak[layer] = 0
+
+        # 6. Optional static (lo, hi) bounds with edge-triggered latching (folded in from PR #122).
+        # Fires once when a metric crosses below `lo` or above `hi`, and re-arms only when it returns in-bounds.
+        for name, (lo, hi) in self.bounds.items():
+            if name not in metrics or name in nonfinite_names:
+                continue
+            x = _to_float(metrics[name])
+            if x is None or not math.isfinite(x):
+                continue
+            if lo is not None and x < lo:
+                key = (name, "lo")
+                if key not in self._bound_latched:
+                    self._bound_latched.add(key)
+                    alarms.append({
+                        "step": step,
+                        "metric": name,
+                        "rule": "static_bound",
+                        "severity": "warn",
+                        "value": x,
+                        "bound": lo,
+                        "detail": f"{name}={x:.4g} fell below lower bound {lo}",
+                    })
+            else:
+                self._bound_latched.discard((name, "lo"))
+            if hi is not None and x > hi:
+                key = (name, "hi")
+                if key not in self._bound_latched:
+                    self._bound_latched.add(key)
+                    alarms.append({
+                        "step": step,
+                        "metric": name,
+                        "rule": "static_bound",
+                        "severity": "warn",
+                        "value": x,
+                        "bound": hi,
+                        "detail": f"{name}={x:.4g} exceeded upper bound {hi}",
+                    })
+            else:
+                self._bound_latched.discard((name, "hi"))
 
         return alarms
 
