@@ -145,6 +145,25 @@ def test_alarms_py_output_loads(tmp_path):
     assert skipped == 0
 
 
+DRYRUN1_FULL = REPO / "teams/05-architecture/jobs/evidence/2026-11-15-dryrun1-full/metrics.jsonl"
+
+
+def test_dryrun1_alarms_match_alarms_dryrun1_md(tmp_path, capsys):
+    """docs/infra_health_w4.md section 2: dry run 1's alarm hits, as run_events rows, are the 3 spike_score pages
+    alarms_dryrun1.md section 4 lists (gradient_norm at steps 468, 505, 841), plus the alarms.loaded marker."""
+    if not DRYRUN1_FULL.exists():
+        pytest.skip("dry run 1 metrics not in this checkout")
+    out = subprocess.run([sys.executable, "-I", str(G8 / "alarms" / "alarms.py"), "--jsonl", str(DRYRUN1_FULL)],
+                         capture_output=True, text=True, check=True).stdout
+    alarms_file = tmp_path / "dryrun1_alarms.jsonl"
+    alarms_file.write_text(out, encoding="utf-8")
+    assert main(["--alarms", str(alarms_file), "--run-id", "dryrun1_full", "--dry-run"]) == 0
+    rows = [json.loads(x) for x in capsys.readouterr().out.strip().splitlines()]
+    hits = [(r["event"], r["severity"], r["step"], json.loads(r["detail"])["metric"]) for r in rows if r["kind"] == "alarm"]
+    assert hits == [("alarm.spike_score", "page", s, "gradient_norm") for s in (468, 505, 841)]
+    assert [r["event"] for r in rows if r["kind"] == "coverage"] == ["alarms.loaded"]
+
+
 def test_cli_dry_run_prints_rows_and_a_coverage_marker(tmp_path, capsys):
     f = tmp_path / "e.jsonl"
     f.write_text(json.dumps(ev("restore.done", step=7)) + "\n", encoding="utf-8")

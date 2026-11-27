@@ -233,6 +233,8 @@ python teams/08-monitoring/clickhouse/load_run_events.py --alarms alarms.jsonl -
 
 Use the run id that `metrics_raw` has for the run (#606), so the panels line up with the training curves.
 
+Evidence on real data (dry run 1 alarms, Team 07's CPU restart drill) and the dry run 2 commands: [`../docs/infra_health_w4.md`](../docs/infra_health_w4.md).
+
 **Never stored:** host names, job ids, store paths, file names, free-text error details and throughput numbers. Only
 an allowed list of fields goes into `detail` (`SAFE_EVENT_FIELDS`, `SAFE_ALARM_FIELDS` in the loader). A line that is
 not a `v5-event/1` record or an alarm hit (a torn last line from a killed process, a supervisor line, a log prefix) is
