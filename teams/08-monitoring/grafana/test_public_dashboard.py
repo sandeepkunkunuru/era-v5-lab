@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 PUBLIC_JSON = HERE / "public_v1.json"
 
@@ -228,3 +230,75 @@ def test_rule_checks_catch_violations():
     assert not HARDWARE_OR_COST.search("The dashboard does not show the cost of the run or the machines that it runs on.")
     assert not HARDWARE_OR_COST.search("SELECT step, run_id, value FROM metrics_rollup_${bucket} WHERE run_id IN ($run)")
     assert ROLLUP_TABLE.match("metrics_rollup_${bucket}") and not ROLLUP_TABLE.match("gpu_telemetry_1s")
+
+
+BENCHMARK_PANEL = "Benchmark Scores Alongside Training Loss"
+
+
+def test_benchmark_panel_is_tier_a_scores_next_to_training_loss():
+    panel = next(p for p in _load()["panels"] if p["title"] == BENCHMARK_PANEL)
+    sql = panel["targets"][0]["rawSql"]
+    assert panel["type"] == "trend" and panel["options"]["xField"] == "step"
+    assert "FROM eval_mini WHERE primary = 1 AND position(run_id, ':tier-a:') > 0" in sql
+    assert "checkpoint_run IN ($run)" in sql and "name = 'loss_ntp' AND run_id IN ($run)" in sql
+    assert "hardware" not in sql and "checkpoint_path" not in sql  # eval_mini columns that stay private
+    loss = next(o for o in panel["fieldConfig"]["overrides"] if o["matcher"]["options"] == ".* training loss$")
+    props = {p["id"]: p["value"] for p in loss["properties"]}
+    assert props["custom.axisPlacement"] == "right" and props["unit"] == "none"
+    assert panel["fieldConfig"]["defaults"]["unit"] == "percent"
+
+
+def _ch(sql: str, data: bytes | None = None) -> str:
+    import urllib.parse
+    import urllib.request
+    url = "http://127.0.0.1:8123/?" + urllib.parse.urlencode({"query": sql})
+    with urllib.request.urlopen(urllib.request.Request(url, data=data or b"", method="POST"), timeout=10) as r:
+        return r.read().decode("utf-8")
+
+
+def _ch_up() -> bool:
+    try:
+        return _ch("SELECT 1").strip() == "1"
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _ch_up(), reason="ClickHouse server is not reachable on 127.0.0.1:8123")
+def test_benchmark_panel_sql_on_clickhouse():
+    """Tier A only, main branch only, newest restart wins for a re-scored checkpoint, loss beside it."""
+    import sys
+    import uuid
+    sys.path.insert(0, str(HERE.parent / "clickhouse"))
+    from load_jsonl import ensure_schema
+    ensure_schema()
+    run = f"test-bench-{uuid.uuid4().hex[:8]}"
+
+    def score(label, step, value, epoch=1, branch="main"):
+        return {"run_id": f"{run}:c{step}:{label}:r1", "model": "lab", "format": "bf16", "item_set": "full",
+                "task": "arc_easy", "num_fewshot": 0, "metric": "acc_norm", "primary": 1, "value": value,
+                "checkpoint_run": run, "checkpoint_branch": branch, "checkpoint_step": step, "checkpoint_epoch": epoch,
+                "hardware": "should-never-show"}
+    scores = [score("tier-a", 600, 31.0), score("tier-a", 1200, 35.0),
+              score("tier-a", 1200, 36.5, epoch=2),            # the same checkpoint scored again after a restart
+              score("tier-b", 900, 99.0),                      # Tier B: not on the public panel
+              score("tier-a", 1200, 77.0, branch="rollback")]  # another branch: not on the public panel
+    scores[2]["run_id"] = f"{run}:c1200:tier-a:r2"
+    scores[4]["run_id"] = f"{run}:c1200b:tier-a:r1"
+    loss = [{"run_id": run, "step": s, "time": "2026-11-27 00:00:00.000", "name": "loss_ntp", "value": 4.0 - s / 1000}
+            for s in (0, 600, 1200)]
+    try:
+        _ch("INSERT INTO eval_mini FORMAT JSONEachRow", "\n".join(map(json.dumps, scores)).encode())
+        _ch("INSERT INTO metrics_raw FORMAT JSONEachRow", "\n".join(map(json.dumps, loss)).encode())
+        panel = next(p for p in _load()["panels"] if p["title"] == BENCHMARK_PANEL)
+        out = _ch(panel["targets"][0]["rawSql"].replace("$run", f"'{run}'") + " FORMAT JSONEachRow")
+        got = [(int(r["step"]), r["series"], round(float(r["value"]), 3)) for r in map(json.loads, out.strip().splitlines())]
+        assert got == [
+            (0, f"{run} training loss", 4.0),
+            (600, f"{run} arc_easy acc_norm", 31.0),
+            (600, f"{run} training loss", 3.4),
+            (1200, f"{run} arc_easy acc_norm", 36.5),
+            (1200, f"{run} training loss", 2.8),
+        ]
+    finally:
+        _ch(f"ALTER TABLE eval_mini DELETE WHERE checkpoint_run = '{run}' SETTINGS mutations_sync = 2")
+        _ch(f"ALTER TABLE metrics_raw DELETE WHERE run_id = '{run}' SETTINGS mutations_sync = 2")

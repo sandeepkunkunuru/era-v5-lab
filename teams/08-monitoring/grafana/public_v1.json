@@ -1100,6 +1100,157 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "id": 33,
+      "panels": [],
+      "title": "Benchmark Scores",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ds}"
+      },
+      "description": "This panel shows the model's scores on a small set of benchmark questions at each checkpoint, next to the training loss.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisLabel": "score (%)",
+            "lineWidth": 2,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "axisSoftMax": 100
+          },
+          "decimals": 1,
+          "unit": "percent",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "step"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* training loss$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "training loss"
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": null
+              },
+              {
+                "id": "custom.axisSoftMax",
+                "value": null
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "xField": "step"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ds}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT step, series, value FROM (SELECT assumeNotNull(checkpoint_step) AS step, concat(assumeNotNull(checkpoint_run), ' ', task, if(num_fewshot > 0, concat(' ', toString(num_fewshot), '-shot'), ''), ' ', metric, if(format = 'bf16', '', concat(' ', format)), if(item_set = 'full', '', concat(' [', substring(item_set, 1, 17), ']'))) AS series, argMax(value, (ifNull(checkpoint_epoch, 0), loaded_at)) AS value FROM eval_mini WHERE primary = 1 AND position(run_id, ':tier-a:') > 0 AND checkpoint_step IS NOT NULL AND ifNull(checkpoint_branch, 'main') = 'main' AND checkpoint_run IN ($run) GROUP BY step, series UNION ALL SELECT step, concat(run_id, ' training loss') AS series, value FROM metrics_raw WHERE name = 'loss_ntp' AND run_id IN ($run) AND value IS NOT NULL) ORDER BY step, series",
+          "refId": "A"
+        }
+      ],
+      "title": "Benchmark Scores Alongside Training Loss",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "series"
+            ],
+            "naming": {
+              "asLabels": true
+            }
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "step",
+            "mode": "outer"
+          }
+        }
+      ],
+      "type": "trend"
     }
   ],
   "refresh": "10s",
