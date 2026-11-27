@@ -1229,7 +1229,7 @@
           "refId": "A"
         }
       ],
-      "title": "Benchmark Scores Alongside Training Loss",
+      "title": "Eval-Mini Scores Alongside Training Loss",
       "transformations": [
         {
           "id": "partitionByValues",

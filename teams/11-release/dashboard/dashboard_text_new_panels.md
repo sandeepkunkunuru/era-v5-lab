@@ -18,6 +18,7 @@ this file. When Monitoring adds a panel to `public_v1.json`, the same pull reque
 
 | Panel | Sentence |
 |---|---|
+| Eval-Mini Scores Alongside Training Loss | This panel shows the model's scores on a small set of benchmark questions at each checkpoint, next to the training loss. |
 | Open Infrastructure Health | This panel counts the restarts of the training run, the alarms that fired and the checkpoints that the run saved. |
 | What This Shows and What It Doesn't | This panel explains what the dashboard shows and what it does not show. |
 

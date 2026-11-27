@@ -70,14 +70,19 @@ DASHBOARD_TEXT = HERE.parents[1] / "11-release" / "dashboard" / "dashboard_text.
 
 
 def _approved_sentences():
-    rows = re.findall(r"^\|\s*(.+?)\s*\|\s*(This panel .+?)\s*\|\s*$", DASHBOARD_TEXT.read_text(encoding="utf-8"), re.M)
-    return dict(rows)
+    """Team 11's sentence for each public panel: dashboard_text.md, plus the table in dashboard_text_new_panels.md for
+    panels Team 11 has written but not yet moved into dashboard_text.md (Team 11 moves the row)."""
+    pattern = r"^\|\s*(.+?)\s*\|\s*(This panel .+?)\s*\|\s*$"
+    rows = dict(re.findall(pattern, DASHBOARD_TEXT.with_name("dashboard_text_new_panels.md").read_text(encoding="utf-8"), re.M))
+    rows.update(re.findall(pattern, DASHBOARD_TEXT.read_text(encoding="utf-8"), re.M))
+    return rows
 
 
 def test_panel_descriptions_are_team11_approved_sentences():
     approved = _approved_sentences()
     charts = [p for p in _load()["panels"] if p["type"] != "row"]
-    assert {p["title"] for p in charts} == set(approved), "public panel titles must match dashboard_text.md"
+    missing = {p["title"] for p in charts} - set(approved)
+    assert not missing, f"public panels with no Team 11 sentence: {sorted(missing)}"
     for p in charts:
         assert p["description"] == approved[p["title"]], f"panel {p['id']} text differs from dashboard_text.md"
 
@@ -232,7 +237,7 @@ def test_rule_checks_catch_violations():
     assert ROLLUP_TABLE.match("metrics_rollup_${bucket}") and not ROLLUP_TABLE.match("gpu_telemetry_1s")
 
 
-BENCHMARK_PANEL = "Benchmark Scores Alongside Training Loss"
+BENCHMARK_PANEL = "Eval-Mini Scores Alongside Training Loss"
 
 
 def test_benchmark_panel_is_tier_a_scores_next_to_training_loss():

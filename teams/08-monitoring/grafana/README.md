@@ -29,14 +29,14 @@ MFU, GPU and eval panels stay empty until a run that logs those metrics is loade
 - No hardware or machine names or specs anywhere a viewer can read (titles, descriptions, text panels, variable labels) or in a query: accelerator models and vendors, clouds and hosting, VRAM, TFLOPS, host names. Prose that says the page does *not* show the cost or the machines is allowed.
 - Each panel's text is Team 11's approved sentence in `teams/11-release/dashboard/dashboard_text.md`; no placeholder text, no em or en dash, team names only.
 
-### Public panel: Benchmark Scores Alongside Training Loss
+### Public panel: Eval-Mini Scores Alongside Training Loss
 
 Team 9's Tier A eval-mini scores (`eval_mini` rows whose `run_id` holds `:tier-a:`, primary metric, main branch) at each
 checkpoint step, in percent on the left axis, with the run's training loss (`loss_ntp`) on the right axis, for the runs
 picked in `run` (`checkpoint_run` is the trainer's run id, #606). A checkpoint scored again after a restart shows its
 newest score (highest `checkpoint_epoch`). Tier B rows, other branches and the `hardware` / `checkpoint_path` columns are
-never shown. The title uses "Benchmark" (in Team 11's glossary) rather than Team 11's working name "Eval-Mini"; the
-sentence is Team 11's. Shows no scores until Team 9's watcher writes Tier A rows for a run on the dashboard.
+never shown. Title and sentence are Team 11's (`teams/11-release/dashboard/dashboard_text_new_panels.md`; Team 11 moves
+the row into `dashboard_text.md`). Shows no scores until Team 9's watcher writes Tier A rows for a run on the dashboard.
 
 ## 1. Start ClickHouse and load the data
 
