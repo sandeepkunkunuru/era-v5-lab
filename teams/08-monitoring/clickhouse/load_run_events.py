@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Load run events (restarts, checkpoints, alarm hits) into ClickHouse `run_events`.
 
-Two inputs, both already written by existing code; neither needs to change:
+Three inputs, all already written by existing code; none needs to change:
 
 1. Team 07's event lines, schema `v5-event/1` (`teams/07-infrastructure/common/events.py`): one JSON object per
    line in `$V5_EVENTS_DIR/<host>-<pid>.jsonl`. A line may carry a text prefix, as in Team 07's results files
    (`restore.done: {...}`). A torn last line from a killed process is skipped and counted.
 2. Alarm hits, one JSON object per line, as `alarms/alarms.py --jsonl metrics.jsonl` prints them
    ({"step", "metric", "rule", "severity", "detail", ...}).
+3. Team 07's checkpoint commit log, `commits.jsonl` (`ckpt/ckpt.py`: {"step", "branch", "path", "time", "reason",
+   "epoch"} per commit), for a run that has no event files, such as dry run 2 (#869). Each line is a `checkpoint` row.
+   `epoch` is the attempt that wrote the commit; it goes up by one when a new process takes over the run after a
+   crash, so a rise in `epoch` is a `restart` row, at the step of the new attempt's first commit. Do not load both
+   event files and commits.jsonl for one run: both carry the same commits.
 
 What each event counts as (`kind`):
 - `restart`            restore.done: a new process restored a committed checkpoint and carried on.
@@ -17,7 +22,8 @@ What each event counts as (`kind`):
 - `alarm`              an alarm hit; `severity` is stop, page or warn, `event` is `alarm.<rule>`.
 - `other`              every other v5-event (started, claimed, backpressure, retention, ...). Stored, so nothing is
                        hidden, but not counted by the panels.
-- `coverage`           one marker row per run and input type (`events.loaded`, `alarms.loaded`), written whenever a
+- `coverage`           one marker row per run and input type (`events.loaded`, `commits.loaded`, `alarms.loaded`),
+                       written whenever a
                        file is loaded, even one with no hits. The panels show a blank, not 0, for a run whose events
                        or alarms were never loaded, so "not checked" never looks like "checked, nothing found".
 
@@ -32,6 +38,7 @@ Usage:
     python load_run_events.py --events $V5_EVENTS_DIR --run-id dryrun2-1234 --dry-run
     python alarms/alarms.py --jsonl metrics.jsonl > alarms.jsonl
     python load_run_events.py --alarms alarms.jsonl --run-id dryrun2-1234
+    python load_run_events.py --commits teams/05-architecture/results/dryrun2-1234/commits.jsonl --run-id dryrun2-1234
 """
 from __future__ import annotations
 
@@ -159,7 +166,7 @@ def alarm_row(rec: dict, run_id: str) -> dict | None:
 
 
 def coverage_row(run_id: str, source: str) -> dict:
-    """Marker that `source` ("events" or "alarms") was loaded for run_id. One per run and source: reloads replace it."""
+    """Marker that `source` ("events", "commits" or "alarms") was loaded for run_id. One per run and source."""
     return {
         "run_id": run_id,
         "event_time": None,
@@ -168,9 +175,48 @@ def coverage_row(run_id: str, source: str) -> dict:
         "event": f"{source}.loaded",
         "severity": "",
         "detail": "{}",
-        "source": source if source == "alarms" else "v5-event",
+        "source": {"alarms": "alarms", "commits": "commits"}.get(source, "v5-event"),
         "event_key": _key("coverage", source, run_id),
     }
+
+
+def _commit_time(val):
+    """commits.jsonl time (Unix seconds) -> ClickHouse DateTime64 text, or None."""
+    if not isinstance(val, (int, float)) or isinstance(val, bool) or not (0 < val < 1e11):
+        return None
+    return datetime.fromtimestamp(float(val), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def parse_commits(path: Path, run_id: str) -> tuple[list[dict], int]:
+    """Rows from Team 07's commits.jsonl: one checkpoint per commit, one restart per rise in the attempt epoch."""
+    if not run_id:
+        raise ValueError("commits.jsonl carries no run_id; pass --run-id")
+    rows, skipped, prev_epoch = [], 0, None
+    for line in _lines(path):
+        if not line.strip():
+            continue
+        rec = _json_from_line(line)
+        step = _step(rec.get("step")) if rec else None
+        if rec is None or step is None:
+            skipped += 1
+            continue
+        epoch = _step(rec.get("epoch"))
+        branch = str(rec.get("branch") or "main")
+        when = _commit_time(rec.get("time"))
+        if epoch is not None and prev_epoch is not None and epoch > prev_epoch:
+            rows.append({
+                "run_id": run_id, "event_time": when, "step": step, "kind": "restart", "event": "attempt.epoch",
+                "severity": "", "detail": json.dumps({"epoch": epoch, "previous": prev_epoch}, sort_keys=True),
+                "source": "commits", "event_key": _key("commits-restart", branch, epoch),
+            })
+        if epoch is not None:
+            prev_epoch = epoch if prev_epoch is None else max(prev_epoch, epoch)
+        rows.append({
+            "run_id": run_id, "event_time": when, "step": step, "kind": "checkpoint", "event": "checkpoint.committed",
+            "severity": "", "detail": _detail(rec, ("branch", "reason", "epoch")), "source": "commits",
+            "event_key": _key("commit", branch, step, epoch),
+        })
+    return rows, skipped
 
 
 def parse_events(path: Path, run_id: str = "") -> tuple[list[dict], int]:
@@ -230,14 +276,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Load restarts, checkpoints and alarm hits into ClickHouse run_events.")
     ap.add_argument("--events", type=Path, action="append", default=[],
                     help="Team 07 v5-event file or V5_EVENTS_DIR (repeatable)")
+    ap.add_argument("--commits", type=Path, action="append", default=[],
+                    help="Team 07 commits.jsonl, for a run with no event files (repeatable; needs --run-id)")
     ap.add_argument("--alarms", type=Path, action="append", default=[],
                     help="alarms.py --jsonl output file (repeatable)")
     ap.add_argument("--run-id", default="", help="run id to store; required for alarm hits, overrides event run_id")
     ap.add_argument("--url", default="http://127.0.0.1:8123", help="ClickHouse HTTP URL")
     ap.add_argument("--dry-run", action="store_true", help="print the rows as JSONEachRow, insert nothing")
     args = ap.parse_args(argv)
-    if not args.events and not args.alarms:
-        ap.error("pass at least one --events or --alarms input")
+    if not args.events and not args.alarms and not args.commits:
+        ap.error("pass at least one --events, --commits or --alarms input")
+    if args.commits and not args.run_id:
+        ap.error("--commits needs --run-id: commits.jsonl carries no run id")
+    if args.commits and args.events:
+        ap.error("load --events or --commits for a run, not both: they carry the same checkpoint commits")
 
     if args.alarms and not args.run_id:
         ap.error("--alarms needs --run-id: alarm hits carry no run id")
@@ -248,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         skipped += s
         runs = {x["run_id"] for x in r} or ({args.run_id} if args.run_id else set())
         rows += [coverage_row(run, "events") for run in sorted(runs)]
+    for p in args.commits:
+        r, s = parse_commits(p, run_id=args.run_id)
+        rows += r + [coverage_row(args.run_id, "commits")]
+        skipped += s
     for p in args.alarms:
         r, s = parse_alarms(p, run_id=args.run_id)
         rows += r + [coverage_row(args.run_id, "alarms")]  # also when the file has no hits: checked, none found

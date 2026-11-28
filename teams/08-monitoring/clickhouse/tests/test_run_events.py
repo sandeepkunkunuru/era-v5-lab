@@ -14,7 +14,7 @@ G8 = HERE.parents[1]
 REPO = HERE.parents[3]
 sys.path.insert(0, str(HERE.parent))
 from load_run_events import (  # noqa: E402
-    SCHEMA_SQL, _ch_post, alarm_row, coverage_row, ensure_table, event_row, insert_rows, main, parse_alarms,
+    SCHEMA_SQL, _ch_post, alarm_row, coverage_row, ensure_table, event_row, insert_rows, main, parse_alarms, parse_commits,
     parse_events,
 )
 
@@ -241,3 +241,49 @@ def test_bad_step_is_stored_as_no_step():
     assert event_row(ev("checkpoint.committed", step=float("nan")))["step"] is None
     assert event_row(ev("checkpoint.committed", step="abc"))["step"] is None
     assert event_row(ev("checkpoint.committed", step=True))["step"] is None
+
+
+DRYRUN2_COMMITS = REPO / "teams/05-architecture/results/dryrun2-1234/commits.jsonl"
+
+
+def _commit(step, epoch=1, reason="interval", t=1795772695.5985086):
+    return json.dumps({"step": step, "branch": "main", "path": f"main/step_{step:08d}-e{epoch}", "time": t + step,
+                       "reason": reason, "epoch": epoch})
+
+
+def test_commits_give_checkpoints_and_restarts_on_epoch_rise(tmp_path):
+    f = tmp_path / "commits.jsonl"
+    f.write_text("\n".join([_commit(0, reason="start"), _commit(195), _commit(195, epoch=2), _commit(350, epoch=2),
+                             _commit(500, epoch=3), '{"step": 6']) + "\n", encoding="utf-8")
+    rows, skipped = parse_commits(f, "r1")
+    assert skipped == 1  # the torn last line
+    assert [(r["kind"], r["step"]) for r in rows] == [
+        ("checkpoint", 0), ("checkpoint", 195), ("restart", 195), ("checkpoint", 195), ("checkpoint", 350),
+        ("restart", 500), ("checkpoint", 500)]
+    assert json.loads(rows[2]["detail"]) == {"epoch": 2, "previous": 1}
+    assert rows[0]["event_time"] == "2026-11-27 09:44:55.598" and rows[0]["source"] == "commits"
+    assert all("path" not in r["detail"] and "step_" not in r["detail"] for r in rows)  # store paths never stored
+    assert len({r["event_key"] for r in rows}) == len(rows)
+    with pytest.raises(ValueError, match="run-id"):
+        parse_commits(f, "")
+
+
+def test_dryrun2_commits_are_nine_checkpoints_and_no_restart():
+    if not DRYRUN2_COMMITS.exists():
+        pytest.skip("dry run 2 record not in this checkout")
+    rows, skipped = parse_commits(DRYRUN2_COMMITS, "dryrun2-1234")
+    assert skipped == 0
+    assert [r["step"] for r in rows if r["kind"] == "checkpoint"] == [0, 195, 350, 513, 672, 836, 993, 1150, 1221]
+    assert not [r for r in rows if r["kind"] == "restart"]
+
+
+def test_cli_commits_needs_a_run_id_and_not_events(tmp_path, capsys):
+    f = tmp_path / "commits.jsonl"
+    f.write_text(_commit(0) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main(["--commits", str(f), "--dry-run"])
+    with pytest.raises(SystemExit):
+        main(["--commits", str(f), "--events", str(f), "--run-id", "r1", "--dry-run"])
+    assert main(["--commits", str(f), "--run-id", "r1", "--dry-run"]) == 0
+    rows = [json.loads(x) for x in capsys.readouterr().out.strip().splitlines()]
+    assert [r["event"] for r in rows] == ["checkpoint.committed", "commits.loaded"]

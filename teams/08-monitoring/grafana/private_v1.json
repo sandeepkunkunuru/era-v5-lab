@@ -2439,7 +2439,7 @@
         "type": "grafana-clickhouse-datasource",
         "uid": "${ds}"
       },
-      "description": "Open infrastructure health per run, counted from stored rows in run_events (so the numbers do not reset on refresh): restarts (restore.done, a new process restored a committed checkpoint), failed restores, committed and failed checkpoints (Team 07 v5-event lines), and alarm hits by severity (alarms.py output). Loaded by clickhouse/load_run_events.py. A blank cell means that input was never loaded for the run (no Team 07 events, or alarms not run), not zero; a 0 means it was loaded and nothing happened.",
+      "description": "Open infrastructure health per run, counted from stored rows in run_events (so the numbers do not reset on refresh): restarts (restore.done, a new process restored a committed checkpoint), failed restores, committed and failed checkpoints (Team 07 v5-event lines or commits.jsonl), and alarm hits by severity (alarms.py output). Loaded by clickhouse/load_run_events.py. A blank cell means that input was never loaded for the run (no Team 07 events, or alarms not run), not zero; a 0 means it was loaded and nothing happened.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -2470,7 +2470,7 @@
           "editorType": "sql",
           "format": 1,
           "queryType": "table",
-          "rawSql": "SELECT run_id, if(countIf(event = 'events.loaded') = 0, NULL, countIf(kind = 'restart')) AS restarts, if(countIf(event = 'events.loaded') = 0, NULL, countIf(kind = 'restart_failed')) AS failed_restores, if(countIf(event = 'events.loaded') = 0, NULL, countIf(kind = 'checkpoint')) AS checkpoints, if(countIf(event = 'events.loaded') = 0, NULL, countIf(kind = 'checkpoint_failed')) AS failed_checkpoints, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'stop')) AS alarm_stop, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'page')) AS alarm_page, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'warn')) AS alarm_warn, maxIf(step, kind != 'coverage') AS last_event_step FROM run_events FINAL WHERE run_id IN ($event_run) GROUP BY run_id ORDER BY run_id",
+          "rawSql": "SELECT run_id, if(countIf(event IN ('events.loaded', 'commits.loaded')) = 0, NULL, countIf(kind = 'restart')) AS restarts, if(countIf(event IN ('events.loaded', 'commits.loaded')) = 0, NULL, countIf(kind = 'restart_failed')) AS failed_restores, if(countIf(event IN ('events.loaded', 'commits.loaded')) = 0, NULL, countIf(kind = 'checkpoint')) AS checkpoints, if(countIf(event IN ('events.loaded', 'commits.loaded')) = 0, NULL, countIf(kind = 'checkpoint_failed')) AS failed_checkpoints, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'stop')) AS alarm_stop, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'page')) AS alarm_page, if(countIf(event = 'alarms.loaded') = 0, NULL, countIf(kind = 'alarm' AND severity = 'warn')) AS alarm_warn, maxIf(step, kind != 'coverage') AS last_event_step FROM run_events FINAL WHERE run_id IN ($event_run) GROUP BY run_id ORDER BY run_id",
           "refId": "A"
         }
       ],
@@ -2938,6 +2938,370 @@
         }
       ],
       "type": "trend"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 168
+      },
+      "id": 38,
+      "panels": [],
+      "title": "Events and alarm state (run_events, clickhouse/load_run_events.py)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ds}"
+      },
+      "description": "Each alarms.py rule for each run whose alarm hits were loaded (alarms.loaded marker): fired (hits, first and last step, severity of the last hit), ok (the rule ran on the loaded file and did not fire) or off by default (ema_z, static_bound and val_regression need settings that a default replay does not pass). ok is only as good as the data the rule sees: memory, MFU and expert rules need fields a run may not log (docs/infra_health_w4.md section 3). Runs whose alarms were never loaded do not appear. Known blind spot: moe_routing cannot read expert_load logged as a list of per-layer lists (dry run 2's format) and resets its streak on step gaps, so with expert_load every 50 steps it shows ok even when routing is far off (docs/events_expert_load_w5.md section 4).",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 169
+      },
+      "id": 39,
+      "title": "Alarm state per rule (run_events)",
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "noValue": "-"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ds}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "A",
+          "rawSql": "WITH runs AS (SELECT DISTINCT run_id FROM run_events FINAL WHERE event = 'alarms.loaded' AND run_id IN ($event_run)), hits AS (SELECT run_id, replaceOne(event, 'alarm.', '') AS rule, count() AS n, min(step) AS first_step, max(step) AS last_step, argMax(severity, step) AS sev FROM run_events FINAL WHERE kind = 'alarm' AND run_id IN ($event_run) GROUP BY run_id, rule) SELECT runs.run_id AS run_id, r.rule AS rule, if(hits.n > 0, 'fired', if(r.rule IN ('ema_z', 'static_bound', 'val_regression'), 'off by default', 'ok')) AS state, hits.sev AS severity, ifNull(hits.n, 0) AS hits, hits.first_step AS first_step, hits.last_step AS last_step FROM runs CROSS JOIN (SELECT arrayJoin(['non_finite', 'spike_score', 'ema_z', 'throughput_drop', 'moe_routing', 'static_bound', 'val_regression', 'indic_share']) AS rule) AS r LEFT JOIN hits ON hits.run_id = runs.run_id AND hits.rule = r.rule ORDER BY run_id, indexOf(['non_finite', 'spike_score', 'ema_z', 'throughput_drop', 'moe_routing', 'static_bound', 'val_regression', 'indic_share'], rule) SETTINGS join_use_nulls = 1"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ds}"
+      },
+      "description": "Every checkpoint commit, restart and alarm hit of the selected runs, in step order, with the run's training loss (loss_ntp) at that step (blank at step 0, where the record has a 0.0 placeholder before any training). From Team 07's event files or commits.jsonl and from alarms.py output. Checkpoint duration and size are not in commits.jsonl, so they are not shown for runs loaded from it, such as dry run 2. Times are UTC as recorded.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 169
+      },
+      "id": 40,
+      "title": "Events: checkpoints, restarts, alarm hits (run_events)",
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "noValue": "-"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ds}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "A",
+          "rawSql": "SELECT e.run_id AS run_id, e.step AS step, e.event_time AS time_utc, e.kind AS kind, e.event AS event, e.severity AS severity, round(nullIf(m.loss, 0), 4) AS training_loss, e.detail AS detail FROM (SELECT run_id, step, event_time, kind, event, severity, detail FROM run_events FINAL WHERE run_id IN ($event_run) AND kind IN ('restart', 'restart_failed', 'checkpoint', 'checkpoint_failed', 'alarm')) AS e LEFT JOIN (SELECT run_id, toInt64(step) AS step, any(value) AS loss FROM metrics_raw WHERE name = 'loss_ntp' AND run_id IN ($event_run) GROUP BY run_id, step) AS m ON m.run_id = e.run_id AND m.step = e.step ORDER BY run_id, step, kind SETTINGS join_use_nulls = 1"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 178
+      },
+      "id": 41,
+      "panels": [],
+      "title": "Expert load (MoE routing, raw expert_load)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ds}"
+      },
+      "description": "Each routed expert's share of its layer's picks at each logged step (raw expert_load, layer picked with the layer variable), with the even share (1 / number of experts) as a dashed line. A line far above the dashed line is an overloaded expert; a line at zero is a dead expert. Dry run 2 logs expert_load every 50 steps (8 layers x 16 experts).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisLabel": "share of the layer's picks",
+            "lineWidth": 1,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "axisSoftMin": 0
+          },
+          "unit": "percentunit",
+          "decimals": 2,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "step"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* even share$"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 179
+      },
+      "id": 42,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "xField": "step"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ds}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "A",
+          "rawSql": "SELECT step, series, v AS value FROM (SELECT step, concat(run_id, ' expert ', expert) AS series, if(sum(value) OVER (PARTITION BY run_id, step) > 0, value / sum(value) OVER (PARTITION BY run_id, step), NULL) AS v FROM (SELECT run_id, step, splitByChar('.', name)[2] AS layer, leftPad(splitByChar('.', name)[3], 2, '0') AS expert, value FROM metrics_raw WHERE name LIKE 'expert_load.%.%' AND run_id IN ($run) AND value IS NOT NULL) WHERE layer = '${layer}' UNION ALL SELECT step, concat(run_id, ' even share') AS series, 1 / count() AS v FROM (SELECT run_id, step, splitByChar('.', name)[2] AS layer, leftPad(splitByChar('.', name)[3], 2, '0') AS expert, value FROM metrics_raw WHERE name LIKE 'expert_load.%.%' AND run_id IN ($run) AND value IS NOT NULL) WHERE layer = '${layer}' GROUP BY run_id, step) ORDER BY step, series"
+        }
+      ],
+      "title": "Expert load distribution, layer ${layer} (share of the layer's picks per expert)",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "series"
+            ],
+            "naming": {
+              "asLabels": true
+            }
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "step",
+            "mode": "outer"
+          }
+        }
+      ],
+      "type": "trend"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ds}"
+      },
+      "description": "How evenly each MoE layer spreads its picks: 100 x the average expert's load / the busiest expert's load. 100% is perfectly even; 50% means the busiest expert gets twice the average (expert_load_imbalance 2.0, since even % = 100 / expert_load_imbalance). The legend's current value is each layer's even % now. One line per run and layer, from raw expert_load.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisLabel": "even %",
+            "lineWidth": 2,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "axisSoftMax": 100,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "unit": "percent",
+          "decimals": 1,
+          "displayName": "${__field.labels.series}",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 50
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "step"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 189
+      },
+      "id": 43,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "xField": "step"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ds}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "A",
+          "rawSql": "SELECT step, series, v AS value FROM (SELECT step, concat(run_id, ' layer ', layer) AS series, if(max(value) > 0, 100 * avg(value) / max(value), NULL) AS v FROM (SELECT run_id, step, splitByChar('.', name)[2] AS layer, leftPad(splitByChar('.', name)[3], 2, '0') AS expert, value FROM metrics_raw WHERE name LIKE 'expert_load.%.%' AND run_id IN ($run) AND value IS NOT NULL) GROUP BY run_id, step, layer) ORDER BY step, series"
+        }
+      ],
+      "title": "Router balance per layer: even % (100 x average / busiest expert)",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "series"
+            ],
+            "naming": {
+              "asLabels": true
+            }
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "step",
+            "mode": "outer"
+          }
+        }
+      ],
+      "type": "trend"
     }
   ],
   "refresh": "10s",
@@ -3072,6 +3436,23 @@
         "query": "SELECT DISTINCT run_id FROM run_events ORDER BY run_id",
         "refresh": 2,
         "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": null,
+        "current": {},
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "${ds}"
+        },
+        "definition": "SELECT DISTINCT splitByChar('.', name)[2] AS layer FROM metrics_raw WHERE name LIKE 'expert_load.%.%' AND run_id IN ($run) ORDER BY toUInt32OrZero(layer)",
+        "includeAll": false,
+        "label": "MoE layer",
+        "multi": false,
+        "name": "layer",
+        "query": "SELECT DISTINCT splitByChar('.', name)[2] AS layer FROM metrics_raw WHERE name LIKE 'expert_load.%.%' AND run_id IN ($run) ORDER BY toUInt32OrZero(layer)",
+        "refresh": 2,
+        "sort": 0,
         "type": "query"
       }
     ]

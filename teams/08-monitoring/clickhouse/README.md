@@ -219,6 +219,7 @@ Two inputs, both written by existing code with no change:
 | Input | Written by | Rows |
 |---|---|---|
 | `--events FILE_OR_DIR` | Team 07 `common/events.py` (`v5-event/1`, one JSON line per event in `$V5_EVENTS_DIR/<host>-<pid>.jsonl`) | `restore.done` → `restart`, `restore.failed` → `restart_failed`, `checkpoint.committed` → `checkpoint`, `checkpoint.failed` / `checkpoint.fenced` → `checkpoint_failed`, any other event → `other` (stored, not counted) |
+| `--commits FILE` | Team 07 `ckpt/ckpt.py` `commits.jsonl`, for a run with no event files (dry run 2); needs `--run-id`; not together with `--events` | one `checkpoint` row per commit; a rise in `epoch` (a new attempt took over) is a `restart` row at that attempt's first commit |
 | `--alarms FILE` | `alarms/alarms.py --jsonl metrics.jsonl` (stdout) | one `alarm` row per hit, `severity` stop / page / warn, `event` = `alarm.<rule>` |
 
 ```bash
